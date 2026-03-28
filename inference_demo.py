@@ -5,7 +5,7 @@ from tqdm import tqdm
 import os
 import os.path as osp
 import numpy as np
-import natsort
+# import natsort
 
 from loguru import logger
 from torch.utils.data import DataLoader
@@ -37,7 +37,7 @@ def get_default_paths(cfg, data_root, data_dir, sfm_model_dir):
     color_dir = osp.join(data_dir, "color_full")
     img_lists += glob.glob(color_dir + "/*.png", recursive=True)
     
-    img_lists = natsort.natsorted(img_lists)
+    img_lists = sorted(img_lists)
 
     # Visualize detector:
     vis_detector_dir = osp.join(data_dir, "detector_vis")

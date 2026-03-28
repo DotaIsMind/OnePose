@@ -19,17 +19,17 @@ import time
 import glob
 import cv2
 import numpy as np
-import natsort
+# import natsort
 import os.path as osp
 from pathlib import Path
 from tqdm import tqdm
 from typing import Dict, Tuple
 
 # ── project root on path ──────────────────────────────────────────────────────
-PROJECT_ROOT = Path(__file__).parent
+PROJECT_ROOT = Path(__name__).parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-ONNX_MODEL_DIR = Path(__file__).parent / "models"
+ONNX_MODEL_DIR = Path(__name__).parent / "models"
 
 # ── demo data paths ───────────────────────────────────────────────────────────
 # DATA_ROOT    = str(PROJECT_ROOT / "data/demo/test_coffee")
@@ -57,16 +57,16 @@ def run_pytorch_inference(max_frames: int | None = None) -> Tuple[dict, dict]:
     """Run the original PyTorch pipeline and return (pred_poses, timing)."""
     import torch
     from torch.utils.data import DataLoader
-    from utils.data_utils import get_K, pad_features3d_random, build_features3d_leaves
-    from utils.path_utils import get_3d_box_path
-    from utils.eval_utils import ransac_PnP
-    from utils.vis_utils import save_demo_image, make_video
-    from utils.model_io import load_network
+    from onnx_demo.utils.data_utils import get_K, pad_features3d_random, build_features3d_leaves
+    from onnx_demo.utils.path_utils import get_3d_box_path
+    from onnx_demo.utils.eval_utils import ransac_PnP
+    from onnx_demo.utils.vis_utils import save_demo_image, make_video
+    from onnx_demo.utils.model_io import load_network
     from src.models.GATsSPG_lightning_model import LitModelGATsSPG
     from src.models.extractors.SuperPoint.superpoint import SuperPoint
     from src.models.matchers.SuperGlue.superglue import SuperGlue
-    from src.sfm.extract_features import confs as sp_confs
-    from src.sfm.match_features import confs as sg_confs
+    from onnx_demo.sfm.extract_features import confs as sp_confs
+    from onnx_demo.sfm.match_features import confs as sg_confs
     from src.datasets.normalized_dataset import NormalizedDataset
     from src.local_feature_2D_detector import LocalFeatureObjectDetector
 
@@ -95,7 +95,7 @@ def run_pytorch_inference(max_frames: int | None = None) -> Tuple[dict, dict]:
     vis_box_dir = osp.join(SEQ_DIR, "pred_vis_pytorch")
     os.makedirs(vis_box_dir, exist_ok=True)
 
-    img_lists = natsort.natsorted(
+    img_lists = sorted(
         glob.glob(osp.join(SEQ_DIR, "color_full", "*.png"))
     )
     im_ids = sorted([int(osp.basename(p).replace('.png', '')) for p in img_lists])
@@ -301,8 +301,8 @@ def compare_poses(pt_poses: dict, onnx_poses: dict) -> dict:
 def make_comparison_video(pt_vis_dir: str, onnx_vis_dir: str,
                           output_path: str):
     """Create a side-by-side comparison video."""
-    pt_imgs   = natsort.natsorted(os.listdir(pt_vis_dir))
-    onnx_imgs = natsort.natsorted(os.listdir(onnx_vis_dir))
+    pt_imgs   = sorted(os.listdir(pt_vis_dir))
+    onnx_imgs = sorted(os.listdir(onnx_vis_dir))
     n = min(len(pt_imgs), len(onnx_imgs))
     if n == 0:
         print("[warn] No images found for comparison video.")
@@ -443,7 +443,7 @@ def main(max_frames: int | None = None):
     ----------
     max_frames : limit the number of frames processed (None = all frames)
     """
-    report_dir = Path(__file__).parent / "benchmark_results"
+    report_dir = Path(__name__).parent / "benchmark_results"
     report_dir.mkdir(parents=True, exist_ok=True)
 
     # 1. Run both pipelines

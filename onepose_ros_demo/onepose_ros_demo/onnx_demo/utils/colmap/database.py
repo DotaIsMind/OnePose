@@ -124,14 +124,16 @@ def pair_id_to_image_ids(pair_id):
 
 def array_to_blob(array):
     if IS_PYTHON3:
-        return array.tostring()
+        # NumPy 2.0+ removed ndarray.tostring(); tobytes() is equivalent.
+        return array.tobytes()
     else:
         return np.getbuffer(array)
 
 
 def blob_to_array(blob, dtype, shape=(-1,)):
     if IS_PYTHON3:
-        return np.fromstring(blob, dtype=dtype).reshape(*shape)
+        # NumPy 2.0 deprecates fromstring for binary data; frombuffer is correct.
+        return np.frombuffer(blob, dtype=dtype).reshape(*shape).copy()
     else:
         return np.frombuffer(blob, dtype=dtype).reshape(*shape)
 

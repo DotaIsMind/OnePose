@@ -4,5 +4,8 @@ runs/
 .vscode
 .hydra
 *.log
+build/
+install/
+log/
 
 __pycache__/

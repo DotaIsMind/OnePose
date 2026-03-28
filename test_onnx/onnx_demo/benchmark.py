@@ -19,24 +19,24 @@ import time
 import glob
 import cv2
 import numpy as np
-import natsort
+# import natsort
 import os.path as osp
 from pathlib import Path
 from tqdm import tqdm
 from typing import Dict, Tuple
 
 # ── project root on path ──────────────────────────────────────────────────────
-PROJECT_ROOT = Path(__file__).parent
+PROJECT_ROOT = Path(__name__).parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-ONNX_MODEL_DIR = Path(__file__).parent / "models"
+ONNX_MODEL_DIR = Path("/home/data/qrb_ros_simulation_ws/OnePose-main/data/models")
 
 # ── demo data paths ───────────────────────────────────────────────────────────
 # DATA_ROOT    = str(PROJECT_ROOT / "data/demo/test_coffee")
 # SEQ_DIR      = str(PROJECT_ROOT / "data/demo/test_coffee/test_coffee-test")
 # SFM_DIR      = str(PROJECT_ROOT / "data/demo/test_coffee/sfm_model")
 
-DATA_ROOT = Path("/raid/tengf/6d-pose-resource/OnePose/data/demo/test_coffee")
+DATA_ROOT = Path("/home/data/qrb_ros_simulation_ws/OnePose-main/data/demo/test_coffee")
 SEQ_DIR = str( DATA_ROOT / "test_coffee-test" )
 SFM_DIR = str( DATA_ROOT / "sfm_model")
 
@@ -95,7 +95,7 @@ def run_pytorch_inference(max_frames: int | None = None) -> Tuple[dict, dict]:
     vis_box_dir = osp.join(SEQ_DIR, "pred_vis_pytorch")
     os.makedirs(vis_box_dir, exist_ok=True)
 
-    img_lists = natsort.natsorted(
+    img_lists = sorted(
         glob.glob(osp.join(SEQ_DIR, "color_full", "*.png"))
     )
     im_ids = sorted([int(osp.basename(p).replace('.png', '')) for p in img_lists])
@@ -301,8 +301,8 @@ def compare_poses(pt_poses: dict, onnx_poses: dict) -> dict:
 def make_comparison_video(pt_vis_dir: str, onnx_vis_dir: str,
                           output_path: str):
     """Create a side-by-side comparison video."""
-    pt_imgs   = natsort.natsorted(os.listdir(pt_vis_dir))
-    onnx_imgs = natsort.natsorted(os.listdir(onnx_vis_dir))
+    pt_imgs   = sorted(os.listdir(pt_vis_dir))
+    onnx_imgs = sorted(os.listdir(onnx_vis_dir))
     n = min(len(pt_imgs), len(onnx_imgs))
     if n == 0:
         print("[warn] No images found for comparison video.")

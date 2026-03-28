@@ -29,7 +29,10 @@ confs = {
 @torch.no_grad()
 def spp(img_lists, feature_out, cfg):
     """extract keypoints info by superpoint"""
-    from utils.model_io import load_network
+    try:
+        from src.utils.model_io import load_network
+    except ImportError:
+        from utils.model_io import load_network
     from src.models.extractors.SuperPoint.superpoint import SuperPoint as spp_det
     from src.datasets.normalized_dataset import NormalizedDataset
     

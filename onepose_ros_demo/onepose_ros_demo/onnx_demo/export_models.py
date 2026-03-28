@@ -19,10 +19,10 @@ import numpy as np
 from pathlib import Path
 
 # Ensure project root is on path
-PROJECT_ROOT = Path(__file__).parent.parent
+PROJECT_ROOT = Path(__name__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-ONNX_MODEL_DIR = Path(__file__).parent / "models"
+ONNX_MODEL_DIR = Path(__name__).parent / "models"
 ONNX_MODEL_DIR.mkdir(parents=True, exist_ok=True)
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -246,8 +246,8 @@ def export_superpoint(model_path: str, output_path: str):
     """Export SuperPoint backbone to ONNX."""
     print(f"\n[1/3] Exporting SuperPoint  ->  {output_path}")
     from src.models.extractors.SuperPoint.superpoint import SuperPoint
-    from src.sfm.extract_features import confs
-    from utils.model_io import load_network
+    from onnx_demo.sfm.extract_features import confs
+    from onnx_demo.utils.model_io import load_network
 
     conf = confs['superpoint']['conf']
     sp = SuperPoint(conf)
@@ -283,8 +283,8 @@ def export_superglue(model_path: str, output_path: str):
     """Export SuperGlue to ONNX."""
     print(f"\n[2/3] Exporting SuperGlue   ->  {output_path}")
     from src.models.matchers.SuperGlue.superglue import SuperGlue
-    from src.sfm.match_features import confs
-    from utils.model_io import load_network
+    from onnx_demo.sfm.match_features import confs
+    from onnx_demo.utils.model_io import load_network
 
     conf = confs['superglue']['conf']
     sg = SuperGlue(conf)

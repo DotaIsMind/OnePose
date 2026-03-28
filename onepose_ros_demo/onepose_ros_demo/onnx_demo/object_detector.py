@@ -62,6 +62,7 @@ class LocalFeatureObjectDetectorOnnx:
         detect_save_dir: str | None = None,
         K_crop_save_dir: str | None = None,
         sp_config: dict | None = None,
+        data_dir: str | None = None,
     ):
         self.extractor = SuperPointOnnx(superpoint_onnx_path, config=sp_config)
         self.matcher   = SuperGlueOnnx(superglue_onnx_path)
@@ -69,13 +70,19 @@ class LocalFeatureObjectDetectorOnnx:
         self.detect_save_dir = detect_save_dir
         self.K_crop_save_dir = K_crop_save_dir
         self.db_dict = self._extract_ref_view_features(sfm_ws_dir, n_ref_view)
+        self.data_dir = data_dir
 
     # ── reference-view feature extraction ────────────────────────────────────
 
     def _extract_ref_view_features(self, sfm_ws_dir: str, n_ref_views: int) -> dict:
-        from utils.colmap.read_write_model import read_model
+        from onnx_demo.utils.colmap.read_write_model import read_model
 
-        assert osp.exists(sfm_ws_dir), f"SfM workspace not found: {sfm_ws_dir}"
+        if not osp.exists(sfm_ws_dir):
+            print(f"SfM workspace directory {sfm_ws_dir} does not exist, reconstructing...")
+            from sfm_preprocess import run_sfm
+            success = run_sfm(self.data_dir, sfm_ws_dir)
+            if not success:
+                raise RuntimeError("SfM reconstruction failed, cannot extract reference view features.")
         cameras, images, points3D = read_model(sfm_ws_dir)
 
         sample_gap = max(len(images) // n_ref_views, 1)
@@ -151,7 +158,7 @@ class LocalFeatureObjectDetectorOnnx:
         K: np.ndarray | None = None,
         crop_size: int = 512,
     ) -> Tuple[np.ndarray, np.ndarray | None]:
-        from utils.data_utils import get_K_crop_resize, get_image_crop_resize
+        from onnx_demo.utils.data_utils import get_K_crop_resize, get_image_crop_resize
 
         x0, y0, x1, y1 = bbox
         origin_img = cv2.imread(query_img_path, cv2.IMREAD_GRAYSCALE)
@@ -228,7 +235,7 @@ class LocalFeatureObjectDetectorOnnx:
         """
         Detect object by projecting 3D bbox with the previous frame's pose.
         """
-        from utils.vis_utils import reproj
+        from onnx_demo.utils.vis_utils import reproj
 
         proj_2d = reproj(K, pre_pose, bbox3D_corner)
         x0, y0 = np.min(proj_2d, axis=0)

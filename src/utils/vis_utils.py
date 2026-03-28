@@ -7,7 +7,7 @@ import numpy as np
 import matplotlib
 import matplotlib.cm as cm
 import matplotlib.pyplot as plt
-import natsort
+# import natsort
 from loguru import logger
 
 matplotlib.use("Agg")
@@ -530,7 +530,7 @@ def dump_wis3d(idx, cfg, data_dir, image0, image1, image_full,
 
 def make_video(image_path, output_video_path):
     # Generate video:
-    images = natsort.natsorted(os.listdir(image_path))
+    images = sorted(os.listdir(image_path))
     Path(output_video_path).parent.mkdir(parents=True, exist_ok=True)
     H, W, C = cv2.imread(osp.join(image_path, images[0])).shape
     if osp.exists(output_video_path):

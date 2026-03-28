@@ -73,7 +73,7 @@ class LocalFeatureObjectDetectorOnnx:
     # ── reference-view feature extraction ────────────────────────────────────
 
     def _extract_ref_view_features(self, sfm_ws_dir: str, n_ref_views: int) -> dict:
-        from utils.colmap.read_write_model import read_model
+        from onnx_demo.src.utils.colmap.read_write_model import read_model
 
         assert osp.exists(sfm_ws_dir), f"SfM workspace not found: {sfm_ws_dir}"
         cameras, images, points3D = read_model(sfm_ws_dir)
@@ -151,7 +151,7 @@ class LocalFeatureObjectDetectorOnnx:
         K: np.ndarray | None = None,
         crop_size: int = 512,
     ) -> Tuple[np.ndarray, np.ndarray | None]:
-        from utils.data_utils import get_K_crop_resize, get_image_crop_resize
+        from src.utils.data_utils import get_K_crop_resize, get_image_crop_resize
 
         x0, y0, x1, y1 = bbox
         origin_img = cv2.imread(query_img_path, cv2.IMREAD_GRAYSCALE)
@@ -228,7 +228,7 @@ class LocalFeatureObjectDetectorOnnx:
         """
         Detect object by projecting 3D bbox with the previous frame's pose.
         """
-        from utils.vis_utils import reproj
+        from src.utils.vis_utils import reproj
 
         proj_2d = reproj(K, pre_pose, bbox3D_corner)
         x0, y0 = np.min(proj_2d, axis=0)

@@ -25,8 +25,12 @@ def names_to_pair(name0, name1):
 def spg(cfg, feature_path, covis_pairs, matches_out, vis_match=False):
     """Match features by SuperGlue"""
     from src.models.matchers.SuperGlue.superglue import SuperGlue as spg_matcher
-    from utils.model_io import load_network
-    from utils.vis_utils import vis_match_pairs
+    try:
+        from src.utils.model_io import load_network
+        from src.utils.vis_utils import vis_match_pairs
+    except ImportError:
+        from utils.model_io import load_network
+        from utils.vis_utils import vis_match_pairs
     
     assert osp.exists(feature_path), feature_path
     feature_file = h5py.File(feature_path, 'r')

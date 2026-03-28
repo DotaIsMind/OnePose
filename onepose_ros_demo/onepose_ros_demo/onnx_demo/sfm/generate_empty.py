@@ -4,16 +4,10 @@ import os.path as osp
 import numpy as np
 
 from pathlib import Path
-try:
-    from src.utils import path_utils
-    from src.utils.colmap.read_write_model import Camera, Image, Point3D
-    from src.utils.colmap.read_write_model import rotmat2qvec
-    from src.utils.colmap.read_write_model import write_model
-except ImportError:
-    from utils import path_utils
-    from utils.colmap.read_write_model import Camera, Image, Point3D
-    from utils.colmap.read_write_model import rotmat2qvec
-    from utils.colmap.read_write_model import write_model
+from onnx_demo.utils import path_utils
+from onnx_demo.utils.colmap.read_write_model import Camera, Image, Point3D
+from onnx_demo.utils.colmap.read_write_model import rotmat2qvec
+from onnx_demo.utils.colmap.read_write_model import write_model
 
 
 def get_pose_from_txt(img_index, pose_dir):

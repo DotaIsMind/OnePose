@@ -7,12 +7,8 @@ import os.path as osp
 import numpy as np
 
 from pathlib import Path
-try:
-    from src.utils.colmap.read_write_model import CAMERA_MODEL_NAMES, Image, read_cameras_binary, read_images_binary
-    from src.utils.colmap.database import COLMAPDatabase
-except ImportError:
-    from utils.colmap.read_write_model import CAMERA_MODEL_NAMES, Image, read_cameras_binary, read_images_binary
-    from utils.colmap.database import COLMAPDatabase
+from onnx_demo.utils.colmap.read_write_model import CAMERA_MODEL_NAMES, Image, read_cameras_binary, read_images_binary
+from onnx_demo.utils.colmap.database import COLMAPDatabase
 
 
 def names_to_pair(name0, name1):

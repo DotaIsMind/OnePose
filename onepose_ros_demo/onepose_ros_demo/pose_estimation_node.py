@@ -53,7 +53,7 @@ from typing import Optional, Tuple
 
 import cv2
 import numpy as np
-import natsort
+# # import natsort
 
 # ── make sure the bundled onnx_demo and src packages are importable ───────────
 # Directory layout (self-contained inside onepose_ros_demo/):
@@ -61,7 +61,7 @@ import natsort
 #     onepose_ros_demo/        ← _THIS_DIR (this file lives here)
 #     onnx_demo/               ← bundled copy of onnx_demo
 #     src/                     ← bundled copy of src/utils
-_THIS_DIR     = Path(__file__).resolve().parent   # …/onepose_ros_demo/onepose_ros_demo/
+_THIS_DIR     = Path(__name__).resolve().parent   # …/onepose_ros_demo/onepose_ros_demo/
 _PKG_DIR      = _THIS_DIR.parent                  # …/onepose_ros_demo/
 _PROJECT_ROOT = _PKG_DIR                          # self-contained: root IS the pkg dir
 for _p in [str(_PKG_DIR)]:
@@ -85,9 +85,10 @@ from onnx_demo.pipeline import (
     _pad_features3d,
     _build_features3d_leaves,
 )
-from onnx_demo.utils.data_utils import get_K
+# from onnx_demo.utils.data_utils import get_K
 from onnx_demo.utils.path_utils import get_3d_box_path
 from onnx_demo.utils.eval_utils import ransac_PnP
+from onnx_demo.utils.vis_utils import save_demo_image
 
 
 # ── default paths (relative to the bundled package dir) ──────────────────────
@@ -96,6 +97,25 @@ _DATA_ROOT    = _PKG_DIR / "data" / "demo" / "test_coffee"
 _SEQ_DIR      = _DATA_ROOT / "test_coffee-test"
 _SFM_DIR      = _DATA_ROOT / "sfm_model"
 
+
+def get_K(intrin_file):
+    assert Path(intrin_file).exists()
+    with open(intrin_file, 'r') as f:
+        lines = f.readlines()
+    intrin_data = [line.rstrip('\n').split(':')[1] for line in lines]
+    fx, fy, cx, cy = list(map(float, intrin_data))
+
+    K = np.array([
+        [fx, 0, cx],
+        [0, fy, cy],
+        [0,  0,  1]
+    ])
+    K_homo = np.array([
+        [fx, 0, cx, 0],
+        [0, fy, cy, 0],
+        [0,  0,  1, 0]
+    ])
+    return K, K_homo
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Helper: convert ROS Image message → OpenCV grayscale numpy array
@@ -153,6 +173,54 @@ def _save_tmp_image(gray: np.ndarray) -> str:
     return _TMP_IMG_PATH
 
 
+def _overlay_rt_on_image_top_left(
+    image: np.ndarray,
+    R: np.ndarray,
+    t: np.ndarray,
+    *,
+    x0: int = 8,
+    y0: int = 20,
+    line_height: int = 18,
+    font_scale: float = 0.45,
+    thickness: int = 1,
+) -> np.ndarray:
+    """
+    Draw 3×3 rotation matrix R and translation vector t at the top-left with
+    cv2.putText (white text, black outline for contrast). Returns a BGR image.
+    """
+    if image.ndim == 2:
+        out = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
+    else:
+        out = image.copy()
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    white = (255, 255, 255)
+    black = (0, 0, 0)
+    y = int(y0)
+    R = np.asarray(R, dtype=np.float64).reshape(3, 3)
+    t = np.asarray(t, dtype=np.float64).reshape(-1)
+
+    def _put_line(text: str) -> None:
+        nonlocal y
+        cv2.putText(
+            out, text, (x0, y), font, font_scale, black, thickness + 2, cv2.LINE_AA,
+        )
+        cv2.putText(
+            out, text, (x0, y), font, font_scale, white, thickness, cv2.LINE_AA,
+        )
+        y += line_height
+
+    _put_line("R:")
+    for i in range(3):
+        row = R[i]
+        _put_line(
+            f"  {row[0]:8.4f} {row[1]:8.4f} {row[2]:8.4f}"
+        )
+    _put_line(
+        f"t: [{t[0]:8.4f}, {t[1]:8.4f}, {t[2]:8.4f}]"
+    )
+    return out
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Core inference engine (stateful, wraps the ONNX pipeline)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -175,6 +243,7 @@ class OnePoseEngine:
         clt_anno_3d_path: str,
         idxs_path: str,
         box3d_path: str,
+        data_root: str | None = None,
         num_leaf: int = 8,
         max_num_kp3d: int = 2500,
     ):
@@ -196,6 +265,7 @@ class OnePoseEngine:
             sfm_ws_dir=sfm_ws_dir,
             output_results=False,
             detect_save_dir=None,
+            data_dir=data_root,
         )
 
         # ── 3-D annotations ───────────────────────────────────────────────────
@@ -326,6 +396,8 @@ class PoseEstimationNode(Node):
     camera_info_topic: camera info topic
                       (default: /camera/camera_info)
     num_leaf        : GATsSPG num_leaf  (default: 8)
+    save_vis        : if True, save visualization via save_demo_image and Rt overlay
+    vis_save_dir    : directory for saved frames when save_vis is True
     """
 
     def __init__(self):
@@ -344,6 +416,11 @@ class PoseEstimationNode(Node):
         self.declare_parameter("image_topic",       "/camera/image_raw")
         self.declare_parameter("camera_info_topic", "/camera/camera_info")
         self.declare_parameter("num_leaf",          8)
+        self.declare_parameter("save_vis",          True)
+        self.declare_parameter(
+            "vis_save_dir",
+            str(Path("/tmp/onepose_ros_vis").resolve()),
+        )
 
         # ── read parameters ───────────────────────────────────────────────────
         self._input_mode   = self.get_parameter("input_mode").value
@@ -358,6 +435,8 @@ class PoseEstimationNode(Node):
         self._image_topic  = self.get_parameter("image_topic").value
         self._ci_topic     = self.get_parameter("camera_info_topic").value
         self._num_leaf     = self.get_parameter("num_leaf").value
+        self._save_vis     = bool(self.get_parameter("save_vis").value)
+        self._vis_save_dir = str(self.get_parameter("vis_save_dir").value)
 
         self.get_logger().info(
             f"[PoseEstimationNode] input_mode = {self._input_mode}"
@@ -384,6 +463,7 @@ class PoseEstimationNode(Node):
             self._sfm_dir, "outputs_superpoint_superglue", "sfm_ws", "model"
         )
         box3d_path  = get_3d_box_path(self._data_root)
+        self._box3d_path = box3d_path
 
         # ── load camera intrinsics (local_file mode) ──────────────────────────
         intrin_path = os.path.join(self._seq_dir, "intrinsics.txt")
@@ -410,6 +490,7 @@ class PoseEstimationNode(Node):
             clt_anno_3d_path=os.path.join(anno_dir, "anno_3d_collect.npz"),
             idxs_path=os.path.join(anno_dir, "idxs.npy"),
             box3d_path=box3d_path,
+            data_root=self._data_root,
             num_leaf=self._num_leaf,
         )
         self.get_logger().info("ONNX models loaded successfully.")
@@ -458,7 +539,7 @@ class PoseEstimationNode(Node):
     def _setup_local_file_mode(self):
         """Prepare image list and start a timer-driven processing loop."""
         color_dir = os.path.join(self._seq_dir, "color_full")
-        img_paths = natsort.natsorted(glob.glob(os.path.join(color_dir, "*.png")))
+        img_paths = sorted(glob.glob(os.path.join(color_dir, "*.png")))
 
         if not img_paths:
             self.get_logger().error(
@@ -514,6 +595,11 @@ class PoseEstimationNode(Node):
             source="local_file",
         )
         self._img_index += 1
+        if self._img_index == 10:
+            self._save_vis = False
+            self.get_logger().info(
+                "[local_file] Saving visualization for 10 frames."
+            )
 
     # ─────────────────────────────────────────────────────────────────────────
     # Camera-topic mode
@@ -699,6 +785,28 @@ class PoseEstimationNode(Node):
             custom_msg.pose_matrix_4x4 = identity_4x4
         
         self._pub_custom.publish(custom_msg)
+
+        # ── optional visualization save ───────────────────────────────────────
+        if self._save_vis and success and pose_4x4 is not None:
+            try:
+                Path(self._vis_save_dir).mkdir(parents=True, exist_ok=True)
+                save_path = os.path.join(
+                    self._vis_save_dir, f"frame_{frame_id:04d}.jpg"
+                )
+                vis_img = save_demo_image(
+                    pose_4x4.astype(np.float64),
+                    np.asarray(K, dtype=np.float64),
+                    image_path=img_path,
+                    box3d_path=self._box3d_path,
+                    draw_box=num_inliers > 6,
+                    save_path=None,
+                    pose_homo=pose_4x4.astype(np.float64),
+                    draw_axes=True,
+                )
+                vis_img = _overlay_rt_on_image_top_left(vis_img, R_mat, np.asarray(t_vec))
+                cv2.imwrite(save_path, vis_img)
+            except Exception as e:
+                self.get_logger().warn(f"save_vis failed: {e}")
 
         # ── log ───────────────────────────────────────────────────────────────
         status = "OK" if success else "FAILED"

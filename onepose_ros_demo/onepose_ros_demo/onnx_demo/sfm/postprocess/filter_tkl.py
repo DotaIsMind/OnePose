@@ -1,12 +1,8 @@
 import os
 import numpy as np
 import os.path as osp
-import matplotlib.pyplot as plt
 
-try:
-    from src.utils.colmap.read_write_model import write_model
-except ImportError:
-    from utils.colmap.read_write_model import write_model
+from onnx_demo.utils.colmap.read_write_model import write_model
 
 
 def get_points_count(points3D, show=False):
@@ -29,6 +25,7 @@ def get_points_count(points3D, show=False):
         count_list_ordered.append(count_dict[count])
     
     if show:
+        import matplotlib.pyplot as plt
         plt.plot(counts, count_list_ordered)
         plt.show()
 
@@ -37,18 +34,20 @@ def get_points_count(points3D, show=False):
 
 def get_tkl(model_path, thres, show=False):
     """ Get the track length value which can limit the number of 3d points below thres"""
-    try:
-        from src.utils.colmap.read_write_model import read_model
-    except ImportError:
-        from utils.colmap.read_write_model import read_model
+    from onnx_demo.utils.colmap.read_write_model import read_model
 
     cameras, images, points3D = read_model(model_path, ext='.bin')
     count_dict, points_count_list = get_points_count(points3D, show)
-    
+
     ret_points = len(points3D.keys())
-    count_keys = np.array(list(count_dict.keys())) 
+    if ret_points == 0:
+        # No triangulated points (e.g. bad matches / COLMAP saw 0 observations).
+        return 1, points_count_list
+
+    count_keys = np.array(list(count_dict.keys()))
     count_keys.sort()
-    
+
+    track_length = int(count_keys[0])
     for key in count_keys:
         ret_points -= count_dict[key]
         if ret_points <= thres:
@@ -63,10 +62,7 @@ def vis_tkl_filtered_pcds(model_path, points_count_list, track_length, output_pa
     Given a track length value, filter 3d points.
     Output filtered pcds for visualization.
     """ 
-    try:
-        from src.utils.colmap.read_write_model import read_model
-    except ImportError:
-        from utils.colmap.read_write_model import read_model
+    from onnx_demo.utils.colmap.read_write_model import read_model
 
     cameras, images, points3D = read_model(model_path, ext='.bin')
     

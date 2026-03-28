@@ -20,13 +20,12 @@ from launch_ros.actions import Node
 from pathlib import Path
 
 # ── package root (one level up from launch/) – self-contained ─────────────────
-_LAUNCH_DIR   = Path(__file__).resolve().parent
-_PKG_DIR      = _LAUNCH_DIR.parent   # …/onepose_ros_demo/
+_PKG_DIR      = Path(__name__).resolve().parent   # …/onepose_ros_demo/
 
-_ONNX_DIR  = str(_PKG_DIR / "onnx_demo" / "models")
-_DATA_ROOT = str(_PKG_DIR / "data" / "demo" / "test_coffee")
-_SEQ_DIR   = str(_PKG_DIR / "data" / "demo" / "test_coffee" / "test_coffee-test")
-_SFM_DIR   = str(_PKG_DIR / "data" / "demo" / "test_coffee" / "sfm_model")
+_ONNX_DIR  =  _PKG_DIR / "onepose_ros_demo" / "onnx_demo" / "models"
+_DATA_ROOT = _PKG_DIR / "data" / "demo" / "test_coffee"
+_SEQ_DIR   = _PKG_DIR / "data" / "demo" / "test_coffee" / "test_coffee-test"
+_SFM_DIR   = _PKG_DIR / "data" / "demo" / "test_coffee" / "sfm_model"
 
 
 def generate_launch_description():
@@ -34,32 +33,32 @@ def generate_launch_description():
         # ── launch arguments ──────────────────────────────────────────────────
         DeclareLaunchArgument(
             "data_root",
-            default_value=_DATA_ROOT,
+            default_value=str(_DATA_ROOT),
             description="Path to the test_coffee root directory",
         ),
         DeclareLaunchArgument(
             "seq_dir",
-            default_value=_SEQ_DIR,
+            default_value=str(_SEQ_DIR),
             description="Path to the test sequence directory (contains color_full/)",
         ),
         DeclareLaunchArgument(
             "sfm_model_dir",
-            default_value=_SFM_DIR,
+            default_value=str(_SFM_DIR),
             description="Path to the sfm_model directory",
         ),
         DeclareLaunchArgument(
             "superpoint_onnx",
-            default_value=str(Path(_ONNX_DIR) / "superpoint.onnx"),
+            default_value=str(_ONNX_DIR / "superpoint.onnx"),
             description="Path to superpoint.onnx",
         ),
         DeclareLaunchArgument(
             "superglue_onnx",
-            default_value=str(Path(_ONNX_DIR) / "superglue.onnx"),
+            default_value=str(_ONNX_DIR / "superglue.onnx"),
             description="Path to superglue.onnx",
         ),
         DeclareLaunchArgument(
             "gatsspg_onnx",
-            default_value=str(Path(_ONNX_DIR) / "gatsspg.onnx"),
+            default_value=str(_ONNX_DIR / "gatsspg.onnx"),
             description="Path to gatsspg.onnx",
         ),
         DeclareLaunchArgument(
@@ -88,10 +87,6 @@ def generate_launch_description():
                 "superglue_onnx":   LaunchConfiguration("superglue_onnx"),
                 "gatsspg_onnx":     LaunchConfiguration("gatsspg_onnx"),
                 "publish_rate_hz":  LaunchConfiguration("publish_rate_hz"),
-                "loop_sequence":    LaunchConfiguration("loop_sequence"),
-            }],
-        ),
-    ])
                 "loop_sequence":    LaunchConfiguration("loop_sequence"),
             }],
         ),

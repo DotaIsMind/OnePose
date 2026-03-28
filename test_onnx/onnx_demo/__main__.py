@@ -20,7 +20,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-ONNX_MODEL_DIR = Path(__file__).parent / "models"
+ONNX_MODEL_DIR = Path("/home/data/qrb_ros_simulation_ws/OnePose-main/data/models")
 
 
 def check_models_exist() -> bool:

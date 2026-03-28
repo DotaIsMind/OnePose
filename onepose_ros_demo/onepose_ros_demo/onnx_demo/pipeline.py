@@ -12,7 +12,7 @@ import glob
 import time
 import cv2
 import numpy as np
-import natsort
+# import natsort
 import os.path as osp
 from pathlib import Path
 from tqdm import tqdm
@@ -34,7 +34,7 @@ def _get_paths(data_root: str, data_dir: str, sfm_model_dir: str) -> Tuple[List[
         sfm_model_dir, "outputs_superpoint_superglue", "sfm_ws", "model"
     )
 
-    img_lists = natsort.natsorted(
+    img_lists = sorted(
         glob.glob(osp.join(data_dir, "color_full", "*.png"))
     )
 
@@ -176,10 +176,10 @@ class OnnxOnePosePipeline:
         pred_poses : {frame_id: (pose_3x4, inliers)}
         timing     : dict with per-stage timing info
         """
-        from utils.data_utils import get_K, pad_features3d_random
-        from utils.path_utils import get_3d_box_path
-        from utils.eval_utils import ransac_PnP
-        from utils.vis_utils import save_demo_image, make_video
+        from onnx_demo.utils.data_utils import get_K, pad_features3d_random
+        from onnx_demo.utils.path_utils import get_3d_box_path
+        from onnx_demo.utils.eval_utils import ransac_PnP
+        from onnx_demo.utils.vis_utils import save_demo_image, make_video
 
         img_lists, paths = _get_paths(data_root, seq_dir, sfm_model_dir)
 

@@ -31,9 +31,10 @@ install(
 )
 
 # ── install executable scripts ────────────────────────────────────────────────
+# Use an absolute path so the installed name is pose_estimation_node.py under
+# lib/<pkg>/ (not lib/<pkg>/onepose_ros_demo/…), which ros2 launch expects.
 install(
-  PROGRAMS
-    onepose_ros_demo/pose_estimation_node.py
+  PROGRAMS "${CMAKE_CURRENT_SOURCE_DIR}/onepose_ros_demo/pose_estimation_node.py"
   DESTINATION lib/${PROJECT_NAME}
 )
 

@@ -166,6 +166,15 @@ python -m onnx_demo --export_only          # 仅导出
 
 报告中含各阶段平均耗时（ms/帧）、PyTorch 与 ONNX 位姿之间的旋转误差（度）与平移误差（厘米）等统计量。
 
+## 三、如何运行 ROS node
+1. **Split video to full image lists**
+```shell
+python parse_scanned_data.py --scanned_object_path ../data/test_coffee
+````
+2. **Run sfm preprocess to generate the sfm model
+```
+
+
 ---
 
 ## 常见问题
@@ -178,3 +187,6 @@ python -m onnx_demo --export_only          # 仅导出
 
 3. **性能**  
    当前默认在 ONNX Runtime 中使用 **CPU**（`CPUExecutionProvider`）。生产环境可按目标平台切换 Execution Provider（如 CUDA、TensorRT）并调线程数。
+
+
+
