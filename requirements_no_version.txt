@@ -1,0 +1,18 @@
+# pytorch-lightning
+aiohttp
+aioredis
+pydegensac
+numpy<2.0
+opencv_python
+yacs
+einops
+kornia
+pickle5
+timm
+hydra-core
+omegaconf
+pycocotools
+wandb
+rich
+transforms3d
+natsort

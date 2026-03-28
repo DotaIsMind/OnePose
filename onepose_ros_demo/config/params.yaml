@@ -1,0 +1,33 @@
+# onepose_ros_demo default configuration
+# =========================================
+# All paths are relative to the repository root unless they are absolute.
+
+pose_estimation_node:
+  ros__parameters:
+
+    # ── Input mode ────────────────────────────────────────────────────────────
+    # "local_file"    : read images from seq_dir/color_full/*.png
+    # "camera_topic"  : subscribe to image_topic
+    input_mode: "local_file"
+
+    # ── Data paths ────────────────────────────────────────────────────────────
+    # These are filled in at runtime by the launch files; override here if needed.
+    # data_root:     "/absolute/path/to/test_coffee"
+    # seq_dir:       "/absolute/path/to/test_coffee/test_coffee-test"
+    # sfm_model_dir: "/absolute/path/to/test_coffee/sfm_model"
+
+    # ── ONNX model paths ──────────────────────────────────────────────────────
+    # superpoint_onnx: "/absolute/path/to/superpoint.onnx"
+    # superglue_onnx:  "/absolute/path/to/superglue.onnx"
+    # gatsspg_onnx:    "/absolute/path/to/gatsspg.onnx"
+
+    # ── local_file mode settings ──────────────────────────────────────────────
+    publish_rate_hz: 2.0      # frames per second
+    loop_sequence:   false    # loop the sequence when finished
+
+    # ── camera_topic mode settings ────────────────────────────────────────────
+    image_topic:        "/camera/image_raw"
+    camera_info_topic:  "/camera/camera_info"
+
+    # ── Model hyper-parameters ────────────────────────────────────────────────
+    num_leaf: 8

@@ -1,0 +1,30 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>onepose_ros_demo</name>
+  <version>0.1.0</version>
+  <description>
+    ROS2 node that wraps the OnePose ONNX inference pipeline and publishes
+    6-DoF pose estimation results on /pose_estimation_result.
+  </description>
+  <maintainer email="user@example.com">user</maintainer>
+  <license>MIT</license>
+
+  <!-- Build tool -->
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <!-- ROS2 runtime dependencies -->
+  <depend>rclpy</depend>
+  <depend>std_msgs</depend>
+  <depend>sensor_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>cv_bridge</depend>
+
+  <!-- Custom message package (built alongside this package) -->
+  <depend>rosidl_default_generators</depend>
+  <member_of_group>rosidl_interface_packages</member_of_group>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

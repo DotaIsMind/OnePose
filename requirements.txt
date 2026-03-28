@@ -1,0 +1,25 @@
+# OnePose + onnx_demo 合并依赖（已去除代码中未直接使用的包）
+#
+# 已移除：aiohttp, aioredis, pickle5, yacs, pydegensac, einops, kornia, timm
+# （仓库内无对应 import；旧环境若仍需要可自行加回）
+#
+# PyTorch / torchvision 请按 CUDA 版本单独安装，例如:
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
+
+pytorch-lightning>=1.5.10
+loguru>=0.5.3
+tqdm
+opencv_python>=4.4.0.46
+hydra-core==1.1.1
+omegaconf==2.1.2
+transforms3d==0.3.1
+natsort==8.1.0
+h5py>=3.1.0
+Pillow
+onnx>=1.14
+onnxruntime>=1.14
+scipy>=1.7
+matplotlib>=3.5
+pycocotools==2.0.4
+wandb==0.12.17
+rich==12.4.4
