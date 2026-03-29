@@ -3,8 +3,7 @@ Single-file ONNX OnePose pipeline.
 
 Consolidates ``pipeline.py``, ``onnx_models.py``, and ``object_detector.py`` for
 easier review and deployment. External deps remain: ``src.utils.*`` (COLMAP IO,
-PnP, vis, intrinsics), OpenCV, NumPy, SciPy, ONNX Runtime, PyTorch (detector
-match tensors), natsort, tqdm.
+PnP, vis, intrinsics), OpenCV, NumPy, SciPy, ONNX Runtime, natsort, tqdm.
 
 Run (from anywhere):
     python /path/to/onnx_demo/pipeline_single.py
@@ -267,21 +266,19 @@ def _pack_extract_data(img_path: str) -> np.ndarray:
 
 
 def _pack_match_data(db_det: dict, q_det: dict, db_size: np.ndarray, q_size: np.ndarray) -> dict:
-    import torch
-
-    def _t(arr):
-        return torch.from_numpy(arr)[None].float()
+    def _batch_f32(arr):
+        return np.asarray(arr, dtype=np.float32)[np.newaxis]
 
     data = {}
     for k, v in db_det.items():
         if k != "size":
-            data[k + "0"] = _t(v)
+            data[k + "0"] = _batch_f32(v)
     for k, v in q_det.items():
         if k != "size":
-            data[k + "1"] = _t(v)
+            data[k + "1"] = _batch_f32(v)
 
-    data["image0"] = np.empty((1, 1) + tuple(db_size)[::-1])
-    data["image1"] = np.empty((1, 1) + tuple(q_size)[::-1])
+    data["image0"] = np.empty((1, 1) + tuple(db_size)[::-1], dtype=np.float32)
+    data["image1"] = np.empty((1, 1) + tuple(q_size)[::-1], dtype=np.float32)
     return data
 
 

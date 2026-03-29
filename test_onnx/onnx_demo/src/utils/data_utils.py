@@ -1,5 +1,4 @@
 import cv2
-import torch
 import numpy as np
 import os.path as osp
 from loguru import logger
@@ -58,6 +57,8 @@ def get_affine_transform(center,
 
 
 def pad_keypoints2d_random(keypoints, features, scores, img_h, img_w, n_target_kpts):
+    import torch
+
     dtype = keypoints.dtype
     
     n_pad = n_target_kpts - keypoints.shape[0]
@@ -83,6 +84,8 @@ def pad_keypoints2d_random(keypoints, features, scores, img_h, img_w, n_target_k
 
 
 def pad_features(features, num_leaf):
+    import torch
+
     num_features = features.shape[0]
     feature_dim = features.shape[1]
     n_pad = num_leaf - num_features
@@ -96,6 +99,8 @@ def pad_features(features, num_leaf):
 
 
 def pad_scores(scores, num_leaf):
+    import torch
+
     num_scores = scores.shape[0]
     n_pad = num_leaf - num_scores
 
@@ -108,17 +113,23 @@ def pad_scores(scores, num_leaf):
 
 
 def avg_features(features):
+    import torch
+
     ret_features = torch.mean(features, dim=0).reshape(-1, 1)
     return ret_features
 
 
 def avg_scores(scores):
+    import torch
+
     ret_scores = torch.mean(scores, dim=0).reshape(-1, 1)
     return ret_scores
 
 
 def pad_keypoints3d_random(keypoints, n_target_kpts):
     """ Pad or truncate orig 3d keypoints to fixed size."""
+    import torch
+
     n_pad = n_target_kpts - keypoints.shape[0]
     
     if n_pad < 0:
@@ -142,6 +153,8 @@ def pad_keypoints3d_random(keypoints, n_target_kpts):
 
 def pad_features3d_random(descriptors, scores, n_target_shape):
     """ Pad or truncate orig 3d feature(descriptors and scores) to fixed size."""
+    import torch
+
     dim = descriptors.shape[0]
     n_pad = n_target_shape - descriptors.shape[1]
 
@@ -161,7 +174,9 @@ def pad_features3d_random(descriptors, scores, n_target_shape):
 
 
 def build_features3d_leaves(descriptors, scores, idxs, n_target_shape, num_leaf):
-    """ Given num_leaf, fix the numf of 3d features to n_target_shape * num_leaf""" 
+    """ Given num_leaf, fix the numf of 3d features to n_target_shape * num_leaf"""
+    import torch
+
     if not isinstance(descriptors, torch.Tensor):
         descriptors = torch.Tensor(descriptors)
     if not isinstance(scores, torch.Tensor):
@@ -208,6 +223,8 @@ def build_features3d_leaves(descriptors, scores, idxs, n_target_shape, num_leaf)
 def reshape_assign_matrix(assign_matrix, orig_shape2d, orig_shape3d, 
                           shape2d, shape3d, pad=True, pad_val=0):
     """ Reshape assign matrix (from 2xk to nxm)"""
+    import torch
+
     assign_matrix = assign_matrix.long()
     
     if pad:
