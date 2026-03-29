@@ -181,19 +181,6 @@ class SuperGlueOnnx:
         self.sess = _get_session(onnx_path)
 
     @staticmethod
-    def empty_match_result(num_kpts0: int, num_kpts1: int) -> '_MatchResult':
-        """
-        Valid match tensor shapes when one side has no keypoints. The exported
-        ONNX graph cannot run kenc with N=0 or M=0 (Conv rejects empty spatial dim).
-        """
-        return _MatchResult(
-            np.full((1, num_kpts0), -1, dtype=np.int32),
-            np.full((1, num_kpts1), -1, dtype=np.int32),
-            np.zeros((1, num_kpts0), dtype=np.float32),
-            np.zeros((1, num_kpts1), dtype=np.float32),
-        )
-
-    @staticmethod
     def _normalize_keypoints(kpts: np.ndarray, h: int, w: int) -> np.ndarray:
         """Normalise keypoints to roughly [-1, 1]."""
         size    = np.array([[w, h]], dtype=np.float32)
@@ -219,10 +206,6 @@ class SuperGlueOnnx:
                 else np.array(data['keypoints0'][0])
         kpts1 = data['keypoints1'][0].numpy() if hasattr(data['keypoints1'], 'numpy') \
                 else np.array(data['keypoints1'][0])
-        n0, n1 = kpts0.shape[0], kpts1.shape[0]
-        if n0 == 0 or n1 == 0:
-            return self.empty_match_result(n0, n1)
-
         desc0 = data['descriptors0'][0].numpy() if hasattr(data['descriptors0'], 'numpy') \
                 else np.array(data['descriptors0'][0])
         desc1 = data['descriptors1'][0].numpy() if hasattr(data['descriptors1'], 'numpy') \

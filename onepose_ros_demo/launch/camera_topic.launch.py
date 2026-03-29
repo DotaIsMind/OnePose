@@ -13,19 +13,32 @@ Usage:
         camera_info_topic:=/my_camera/camera_info
 """
 
+from ament_index_python.packages import get_package_prefix, get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 from pathlib import Path
 
-# ── package root (one level up from launch/) – self-contained ─────────────────
-_PKG_DIR      = Path(__name__).resolve().parent   # …/onepose_ros_demo/
+_PKG_NAME = "onepose_ros_demo"
+# ament index: same workspace resolution as CMake find_package(onepose_ros_demo)
+_PREFIX = Path(get_package_prefix(_PKG_NAME))
+_SHARE = Path(get_package_share_directory(_PKG_NAME))
+# ONNX bundled under lib/ (not share/); models path for superpoint/superglue/gatsspg
+_ONNX_LIB_ROOT = _PREFIX / "lib" / _PKG_NAME / "onnx_demo"
+_ONNX_DIR = _ONNX_LIB_ROOT / "models" / "onnx"
 
-_ONNX_DIR  =  _PKG_DIR / "onepose_ros_demo" / "onnx_demo" / "models"
-_DATA_ROOT = _PKG_DIR / "data" / "test_coffee"
-_SEQ_DIR   = _PKG_DIR / "data" / "test_coffee" / "test_coffee-test"
-_SFM_DIR   = _PKG_DIR / "data" / "test_coffee" / "sfm_model"
+# Demo object data: installed to share/<pkg>/data/... via CMakeLists install(DIRECTORY data/ ...)
+_PKG_DATA = _SHARE / "data"
+_SRC_DATA = Path(__file__).resolve().parent.parent / "data"
+_DATA_BASE = _PKG_DATA if _PKG_DATA.is_dir() else _SRC_DATA
+_MARK = _DATA_BASE / "demo" / "mark_cup"
+_DATA_ROOT = str(_MARK)
+_SEQ_DIR = str(_MARK / "mark_cup-annotate")
+_SFM_DIR = str(_MARK / "sfm_model")
+# runtime.vis_dir: default under installed onnx_demo (writable if user chmods, else override)
+_VIS_DIR = (_ONNX_LIB_ROOT / "outputs").resolve()
 
 
 def generate_launch_description():
@@ -71,6 +84,31 @@ def generate_launch_description():
             default_value=str(_ONNX_DIR / "gatsspg.onnx"),
             description="Path to gatsspg.onnx",
         ),
+        DeclareLaunchArgument(
+            "publish_rate_hz",
+            default_value="2.0",
+            description="Unused in camera_topic mode; still passed to the node",
+        ),
+        DeclareLaunchArgument(
+            "loop_sequence",
+            default_value="false",
+            description="Unused in camera_topic mode; still passed to the node",
+        ),
+        DeclareLaunchArgument(
+            "num_leaf",
+            default_value="8",
+            description="GATsSPG num_leaf",
+        ),
+        DeclareLaunchArgument(
+            "save_vis",
+            default_value="true",
+            description="Save visualization frames when True",
+        ),
+        DeclareLaunchArgument(
+            "vis_save_dir",
+            default_value="/tmp/onepose_ros_vis",
+            description="Directory for saved visualization images",
+        ),
 
         # ── node ──────────────────────────────────────────────────────────────
         Node(
@@ -86,8 +124,21 @@ def generate_launch_description():
                 "superpoint_onnx":     LaunchConfiguration("superpoint_onnx"),
                 "superglue_onnx":      LaunchConfiguration("superglue_onnx"),
                 "gatsspg_onnx":        LaunchConfiguration("gatsspg_onnx"),
+                "publish_rate_hz":     ParameterValue(
+                    LaunchConfiguration("publish_rate_hz"), value_type=float
+                ),
+                "loop_sequence":       ParameterValue(
+                    LaunchConfiguration("loop_sequence"), value_type=bool
+                ),
                 "image_topic":         LaunchConfiguration("image_topic"),
                 "camera_info_topic":   LaunchConfiguration("camera_info_topic"),
+                "num_leaf":            ParameterValue(
+                    LaunchConfiguration("num_leaf"), value_type=int
+                ),
+                "save_vis":            ParameterValue(
+                    LaunchConfiguration("save_vis"), value_type=bool
+                ),
+                "vis_save_dir":        LaunchConfiguration("vis_save_dir"),
             }],
         ),
     ])

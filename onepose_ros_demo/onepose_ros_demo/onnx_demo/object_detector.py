@@ -20,7 +20,26 @@ from onnx_demo.onnx_models import SuperPointOnnx, SuperGlueOnnx
 def _pack_extract_data(img_path: str) -> np.ndarray:
     """Load a grayscale image and return [1, H, W] float32 array."""
     image = cv2.imread(img_path, cv2.IMREAD_GRAYSCALE)
+    if image is None:
+        raise FileNotFoundError(f"Cannot read image: {img_path}")
     return (image[np.newaxis] / 255.0).astype(np.float32)
+
+
+def _resolve_colmap_image_path(raw_name: str, seq_dir: str | None) -> str:
+    """
+    COLMAP often stores paths like ../../data/demo/... relative to the project
+    ``data/demo`` directory. Resolve using ``seq_dir`` (…/mark_cup/mark_cup-annotate).
+    """
+    if osp.isabs(raw_name) and osp.isfile(raw_name):
+        return raw_name
+    if osp.isfile(raw_name):
+        return raw_name
+    if seq_dir:
+        base = Path(seq_dir).resolve().parent.parent
+        cand = (base / raw_name).resolve()
+        if cand.is_file():
+            return str(cand)
+    return raw_name
 
 
 def _pack_match_data(db_det: dict, q_det: dict,
@@ -62,33 +81,30 @@ class LocalFeatureObjectDetectorOnnx:
         detect_save_dir: str | None = None,
         K_crop_save_dir: str | None = None,
         sp_config: dict | None = None,
-        data_dir: str | None = None,
+        seq_dir: str | None = None,
     ):
         self.extractor = SuperPointOnnx(superpoint_onnx_path, config=sp_config)
         self.matcher   = SuperGlueOnnx(superglue_onnx_path)
         self.output_results  = output_results
         self.detect_save_dir = detect_save_dir
         self.K_crop_save_dir = K_crop_save_dir
+        self._seq_dir = seq_dir
         self.db_dict = self._extract_ref_view_features(sfm_ws_dir, n_ref_view)
-        self.data_dir = data_dir
 
     # ── reference-view feature extraction ────────────────────────────────────
 
     def _extract_ref_view_features(self, sfm_ws_dir: str, n_ref_views: int) -> dict:
-        from onnx_demo.utils.colmap.read_write_model import read_model
+        from onnx_demo.src.utils.colmap.read_write_model import read_model
 
-        if not osp.exists(sfm_ws_dir):
-            print(f"SfM workspace directory {sfm_ws_dir} does not exist, reconstructing...")
-            from sfm_preprocess import run_sfm
-            success = run_sfm(self.data_dir, sfm_ws_dir)
-            if not success:
-                raise RuntimeError("SfM reconstruction failed, cannot extract reference view features.")
+        assert osp.exists(sfm_ws_dir), f"SfM workspace not found: {sfm_ws_dir}"
         cameras, images, points3D = read_model(sfm_ws_dir)
 
         sample_gap = max(len(images) // n_ref_views, 1)
         db_dict = {}
         for idx in range(1, len(images), sample_gap):
-            db_img_path = images[idx].name
+            db_img_path = _resolve_colmap_image_path(
+                images[idx].name, self._seq_dir
+            )
             db_img = _pack_extract_data(db_img_path)          # [1, H, W]
             db_inp = db_img[np.newaxis]                        # [1, 1, H, W]
             det = self.extractor(db_inp)
@@ -158,7 +174,7 @@ class LocalFeatureObjectDetectorOnnx:
         K: np.ndarray | None = None,
         crop_size: int = 512,
     ) -> Tuple[np.ndarray, np.ndarray | None]:
-        from onnx_demo.utils.data_utils import get_K_crop_resize, get_image_crop_resize
+        from src.utils.data_utils import get_K_crop_resize, get_image_crop_resize
 
         x0, y0, x1, y1 = bbox
         origin_img = cv2.imread(query_img_path, cv2.IMREAD_GRAYSCALE)
@@ -235,7 +251,7 @@ class LocalFeatureObjectDetectorOnnx:
         """
         Detect object by projecting 3D bbox with the previous frame's pose.
         """
-        from onnx_demo.utils.vis_utils import reproj
+        from src.utils.vis_utils import reproj
 
         proj_2d = reproj(K, pre_pose, bbox3D_corner)
         x0, y0 = np.min(proj_2d, axis=0)

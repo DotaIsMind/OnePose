@@ -2,43 +2,38 @@
 """
 pose_estimation_node.py
 =======================
-ROS2 node that wraps the OnePose ONNX inference pipeline and publishes
+ROS2 node that wraps the OnePose ONNX **online** inference pipeline
+(``onnx_demo/pipeline_online.py`` → ``CameraPosePipeline``) and publishes
 6-DoF pose estimation results.
+
+Camera stream pipeline (与 ``pipeline_online`` / ``camera_pipeline.md`` 一致)
+----------------------------------------
+每帧: 灰度 ``uint8`` ``(H,W)`` → 写临时 PNG（检测器 ``crop_img_by_bbox`` 依赖路径）→
+``detect`` 或 ``previous_pose_detect``（由上一帧 PnP 内点数决定）→ 可选 **检测框面积过大**
+时中心 ROI fallback → SuperPoint 裁剪图 → GAT 2D–3D 匹配 → RANSAC PnP → 更新 ``prev_pose``。
 
 Two input modes
 ---------------
-1. **local_file** (default)
-   Reads PNG images from  <project_root>/data/demo/test_coffee/test_coffee-test/color_full/
-   and processes them sequentially at a configurable rate.
+1. **local_file**
+   Reads PNG images from ``<seq_dir>/color_full/*.png`` (paths from parameters).
 
 2. **camera_topic**
-   Subscribes to  /camera/image_raw  (sensor_msgs/Image) for live frames.
+   Subscribes to ``image_topic`` (sensor_msgs/Image) for live frames.
    Camera intrinsics are read either from a parameter or from the
    /camera/camera_info  topic (sensor_msgs/CameraInfo).
+   Optional ``ref_image_width`` / ``ref_image_height`` scale K from intrinsics
+   reference resolution to the actual image size (same as ``pipeline_online`` main).
 
 Published topic
 ---------------
 /pose_estimation_result  (geometry_msgs/PoseStamped)
-  header.stamp    – ROS timestamp of the inference
-  header.frame_id – "camera_optical_frame"
-  pose.position   – translation (x, y, z) in metres
-  pose.orientation– rotation as quaternion (x, y, z, w)
+/pose_estimation_result_custom  (onepose_ros_demo/PoseEstimationResult)
 
 Usage examples
 --------------
-# local-file mode (default)
-ros2 run onepose_ros_demo pose_estimation_node.py
-
-# camera-topic mode
-ros2 run onepose_ros_demo pose_estimation_node.py \
-    --ros-args -p input_mode:=camera_topic
-
-# override data paths
-ros2 run onepose_ros_demo pose_estimation_node.py \
-    --ros-args \
-    -p data_root:=/path/to/test_coffee \
-    -p seq_dir:=/path/to/test_coffee/test_coffee-test \
-    -p sfm_model_dir:=/path/to/test_coffee/sfm_model
+# All parameters must be set (e.g. via launch file or --ros-args).
+ros2 launch onepose_ros_demo local_file.launch.py
+ros2 launch onepose_ros_demo camera_topic.launch.py
 """
 
 from __future__ import annotations
@@ -71,6 +66,7 @@ for _p in [str(_PKG_DIR)]:
 # ── ROS2 imports ──────────────────────────────────────────────────────────────
 import rclpy
 from rclpy.node import Node
+from rclpy.parameter import Parameter
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 
 from std_msgs.msg import Header
@@ -86,16 +82,9 @@ from onnx_demo.pipeline import (
     _build_features3d_leaves,
 )
 # from onnx_demo.utils.data_utils import get_K
-from onnx_demo.utils.path_utils import get_3d_box_path
-from onnx_demo.utils.eval_utils import ransac_PnP
-from onnx_demo.utils.vis_utils import save_demo_image
-
-
-# ── default paths (relative to the bundled package dir) ──────────────────────
-_ONNX_DIR     = _PKG_DIR / "onnx_demo" / "models"
-_DATA_ROOT    = _PKG_DIR / "data" / "demo" / "test_coffee"
-_SEQ_DIR      = _DATA_ROOT / "test_coffee-test"
-_SFM_DIR      = _DATA_ROOT / "sfm_model"
+from onnx_demo.src.utils.path_utils import get_3d_box_path
+from onnx_demo.src.utils.eval_utils import ransac_PnP
+from onnx_demo.src.utils.vis_utils import save_demo_image
 
 
 def get_K(intrin_file):
@@ -243,7 +232,7 @@ class OnePoseEngine:
         clt_anno_3d_path: str,
         idxs_path: str,
         box3d_path: str,
-        data_root: str | None = None,
+        seq_dir: str | None = None,
         num_leaf: int = 8,
         max_num_kp3d: int = 2500,
     ):
@@ -265,7 +254,7 @@ class OnePoseEngine:
             sfm_ws_dir=sfm_ws_dir,
             output_results=False,
             detect_save_dir=None,
-            data_dir=data_root,
+            seq_dir=seq_dir,
         )
 
         # ── 3-D annotations ───────────────────────────────────────────────────
@@ -382,20 +371,20 @@ class PoseEstimationNode(Node):
 
     Parameters (ROS2 parameters)
     ----------------------------
-    input_mode      : "local_file" | "camera_topic"   (default: "local_file")
-    data_root       : path to test_coffee root dir
-    seq_dir         : path to test sequence dir (contains color_full/)
+    All parameters are **required** (no in-node defaults); set them in a launch file
+    or parameter YAML. See ``launch/local_file.launch.py`` and
+    ``launch/camera_topic.launch.py``.
+
+    input_mode      : "local_file" | "camera_topic"
+    data_root       : path to dataset root (annotations / 3D box)
+    seq_dir         : path to test sequence dir (contains color_full/, intrinsics.txt)
     sfm_model_dir   : path to sfm_model dir
-    superpoint_onnx : path to superpoint.onnx
-    superglue_onnx  : path to superglue.onnx
-    gatsspg_onnx    : path to gatsspg.onnx
-    publish_rate_hz : frame rate for local_file mode  (default: 2.0)
-    loop_sequence   : loop the local sequence forever  (default: False)
+    superpoint_onnx, superglue_onnx, gatsspg_onnx : ONNX model paths
+    publish_rate_hz : frame rate for local_file mode
+    loop_sequence   : loop the local sequence forever
     image_topic     : image topic for camera_topic mode
-                      (default: /camera/image_raw)
-    camera_info_topic: camera info topic
-                      (default: /camera/camera_info)
-    num_leaf        : GATsSPG num_leaf  (default: 8)
+    camera_info_topic : camera info topic
+    num_leaf        : GATsSPG num_leaf
     save_vis        : if True, save visualization via save_demo_image and Rt overlay
     vis_save_dir    : directory for saved frames when save_vis is True
     """
@@ -403,24 +392,21 @@ class PoseEstimationNode(Node):
     def __init__(self):
         super().__init__("pose_estimation_node")
 
-        # ── declare parameters ────────────────────────────────────────────────
-        self.declare_parameter("input_mode",        "local_file")
-        self.declare_parameter("data_root",         str(_DATA_ROOT))
-        self.declare_parameter("seq_dir",           str(_SEQ_DIR))
-        self.declare_parameter("sfm_model_dir",     str(_SFM_DIR))
-        self.declare_parameter("superpoint_onnx",   str(_ONNX_DIR / "superpoint.onnx"))
-        self.declare_parameter("superglue_onnx",    str(_ONNX_DIR / "superglue.onnx"))
-        self.declare_parameter("gatsspg_onnx",      str(_ONNX_DIR / "gatsspg.onnx"))
-        self.declare_parameter("publish_rate_hz",   2.0)
-        self.declare_parameter("loop_sequence",     False)
-        self.declare_parameter("image_topic",       "/camera/image_raw")
-        self.declare_parameter("camera_info_topic", "/camera/camera_info")
-        self.declare_parameter("num_leaf",          8)
-        self.declare_parameter("save_vis",          True)
-        self.declare_parameter(
-            "vis_save_dir",
-            str(Path("/tmp/onepose_ros_vis").resolve()),
-        )
+        # ── declare parameters (no defaults — set via launch file or YAML) ───
+        self.declare_parameter("input_mode", Parameter.Type.STRING)
+        self.declare_parameter("data_root", Parameter.Type.STRING)
+        self.declare_parameter("seq_dir", Parameter.Type.STRING)
+        self.declare_parameter("sfm_model_dir", Parameter.Type.STRING)
+        self.declare_parameter("superpoint_onnx", Parameter.Type.STRING)
+        self.declare_parameter("superglue_onnx", Parameter.Type.STRING)
+        self.declare_parameter("gatsspg_onnx", Parameter.Type.STRING)
+        self.declare_parameter("publish_rate_hz", Parameter.Type.DOUBLE)
+        self.declare_parameter("loop_sequence", Parameter.Type.BOOL)
+        self.declare_parameter("image_topic", Parameter.Type.STRING)
+        self.declare_parameter("camera_info_topic", Parameter.Type.STRING)
+        self.declare_parameter("num_leaf", Parameter.Type.INTEGER)
+        self.declare_parameter("save_vis", Parameter.Type.BOOL)
+        self.declare_parameter("vis_save_dir", Parameter.Type.STRING)
 
         # ── read parameters ───────────────────────────────────────────────────
         self._input_mode   = self.get_parameter("input_mode").value
@@ -440,6 +426,18 @@ class PoseEstimationNode(Node):
 
         self.get_logger().info(
             f"[PoseEstimationNode] input_mode = {self._input_mode}"
+        )
+
+        # ── publishers (declare before heavy load so ``ros2 topic info`` works while models init) ──
+        self._pub_pose_stamped = self.create_publisher(
+            PoseStamped,
+            "/pose_estimation_result",
+            10,
+        )
+        self._pub_custom = self.create_publisher(
+            PoseEstimationResult,
+            "/pose_estimation_result_custom",
+            10,
         )
 
         # ── validate ONNX models ──────────────────────────────────────────────
@@ -490,35 +488,14 @@ class PoseEstimationNode(Node):
             clt_anno_3d_path=os.path.join(anno_dir, "anno_3d_collect.npz"),
             idxs_path=os.path.join(anno_dir, "idxs.npy"),
             box3d_path=box3d_path,
-            data_root=self._data_root,
+            seq_dir=self._seq_dir,
             num_leaf=self._num_leaf,
         )
         self.get_logger().info("ONNX models loaded successfully.")
 
-        # ── publishers ────────────────────────────────────────────────────────
-        # geometry_msgs/PoseStamped (legacy):
-        #   header.stamp     – ROS timestamp
-        #   pose.position    – translation (x, y, z) in metres
-        #   pose.orientation – rotation as quaternion (x, y, z, w)
-        self._pub_pose_stamped = self.create_publisher(
-            PoseStamped,
-            "/pose_estimation_result",
-            10,
-        )
-        # Custom PoseEstimationResult message:
-        #   header            – timestamp + frame_id
-        #   input_source      – "local_file" or "camera_topic"
-        #   frame_id          – 0-based frame counter
-        #   rotation_matrix   – 3×3 rotation matrix, row-major
-        #   translation_vector– translation vector (metres)
-        #   pose_matrix_4x4   – full 4×4 homogeneous pose, row-major
-        #   num_inliers       – PnP RANSAC inlier count (-1 on failure)
-        #   success           – true when pose estimation succeeded
-        self._pub_custom = self.create_publisher(
-            PoseEstimationResult,
-            "/pose_estimation_result_custom",
-            10,
-        )
+        # Published topics (created early in __init__):
+        #   /pose_estimation_result         – geometry_msgs/PoseStamped
+        #   /pose_estimation_result_custom  – onepose_ros_demo/PoseEstimationResult
 
         # ── mode-specific setup ───────────────────────────────────────────────
         if self._input_mode == "local_file":
@@ -820,10 +797,6 @@ class PoseEstimationNode(Node):
             f"{t_vec[2]:.4f}]"
         )
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Entry point
-# ─────────────────────────────────────────────────────────────────────────────
 
 def main(args=None):
     rclpy.init(args=args)

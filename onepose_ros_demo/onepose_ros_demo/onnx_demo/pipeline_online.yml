@@ -1,0 +1,50 @@
+# OnePose 在线视频推理配置（相对路径均相对于本 YAML 所在目录）
+#
+# 重要：input.video、data.data_root、data.seq_dir、data.sfm_model_dir 必须对应**同一物体**。
+# 若用 A 物体的 SfM 参考图去匹配 B 物体的视频，会出现仿射框铺满整幅图等错误检测。
+
+input:
+  video: ../../data/demo/mark_cup/mark_cup-annotate/Frames.m4v
+
+models:
+  onnx_dir: ./models/onnx
+  superpoint_onnx: null
+  superglue_onnx: null
+  gatsspg_onnx: null
+
+data:
+  # 含 box3d_corners.txt 的物体根目录（与 parse_scanned_data 写入位置一致）
+  data_root: ../../data/demo/mark_cup
+  # 测试序列目录（含 intrinsics.txt，一般由 parse_scanned_data 对 Frames.m4v 生成）
+  seq_dir: ../../data/demo/mark_cup/mark_cup-annotate
+  # 必须与 data_root 为同一物体；由 run_single.py 在 annotate 序列上产出
+  sfm_model_dir: ../../data/demo/mark_cup/sfm_model
+  intrinsics_file: null
+
+runtime:
+  max_frames: 300
+  vis_dir: ./outputs
+  frame_stride: 1
+  ref_width: null
+  ref_height: null
+
+pipeline:
+  num_leaf: 8
+  max_num_kp3d: 2500
+  crop_size: 512
+  tmp_gray_path: /tmp/onepose_online_query_gray.png
+  tmp_bgr_path: /tmp/onepose_online_query_vis.png
+  min_inliers_for_prev_pose: 8
+  min_inliers_ok: 6
+
+detector:
+  n_ref_view: 15
+  # 仿射检测框面积占全图比例上限；设为 null 则关闭检测器过滤与在线中心回退
+  bbox_max_area_ratio: 0.45
+  # 回退时中心窗口边长 = min(W,H) * fallback_center_scale
+  fallback_center_scale: 0.55
+superpoint:
+  nms_radius: 3
+  keypoint_threshold: 0.005
+  max_keypoints: 4096
+  remove_borders: 4

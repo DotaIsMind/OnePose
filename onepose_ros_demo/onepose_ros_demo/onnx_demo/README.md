@@ -1,30 +1,50 @@
 # OnePose `onnx_demo` 说明
 
-本包在 **ONNX Runtime** 上复现与 `inference_demo.py` 相近的推理流程，便于在无 GPU 或仅需部署推理的场景下使用。核心模块包括：
+本目录在 **ONNX Runtime（默认 `CPUExecutionProvider`）** 上提供从扫描数据预处理、离线 SfM、离线逐帧验证到**在线视频位姿估计**的完整链路。详细设计与 API 约定见 **[`camera_pipeline.md`](camera_pipeline.md)**。
 
-| 模块 | 作用 |
+---
+
+## 端到端四脚本（Pose Estimation Pipeline）
+
+下列脚本按**数据流顺序**组成部署流水线（均在 `test_onnx/onnx_demo/`）：
+
+| 顺序 | 脚本 | 阶段 | 作用 |
+|------|------|------|------|
+| ① | [`parse_scanned_data.py`](parse_scanned_data.py) | 数据准备 | 解析 ARKit 等扫描目录，生成 `intrinsics.txt`、`box3d_corners.txt`、`color/`、`color_full/`、`poses/` 等 |
+| ② | [`run_single.py`](run_single.py) | 离线 SfM（每物体一次） | COLMAP 三角化 + 后处理，产出 `sfm_model_dir/outputs_superpoint_superglue/{anno,sfm_ws/model}` |
+| ③ | [`pipeline_single.py`](pipeline_single.py) | 离线逐帧推理（验证） | 单文件整合 SP / SG / GAT 与检测器；`OnnxOnePosePipeline.run_sequence` 读 `color_full/*.png`，输出位姿与 `demo_video_onnx.mp4` |
+| ④ | [`pipeline_online.py`](pipeline_online.py) | 在线视频 / 相机流 | `CameraPosePipeline` + YAML：`FrameInput`（灰度 + K）→ 每帧 `PoseEstimationResult` |
+
+**依赖关系**：④ 依赖 ② 的 `sfm_model_dir` 与 ① 提供的 `data_root`（含 3D 框等）；③ 与 ④ 可并行用于验证，不互为前置。①② 为物体**首次部署**的离线阶段。
+
+---
+
+## 模块说明
+
+| 模块 | 说明 |
 |------|------|
-| `export_models.py` | 将 PyTorch 权重导出为 `.onnx` |
-| `pipeline.py` | 整段序列位姿估计（`OnnxOnePosePipeline`） |
-| `onnx_models.py` | SuperPoint / SuperGlue / GATsSPG 的 ORT 封装 |
-| `object_detector.py` | 基于 SP+SG 的 2D 目标检测（ONNX） |
-| `benchmark.py` | PyTorch 与 ONNX 的耗时与位姿误差对比 |
+| **`parse_scanned_data.py`** | 命令行：`--scanned_object_path`。处理 `*-annotate`（标注序列）与 `*-test`（测试序列）子目录，不写位姿估计，只准备目录与几何文件。 |
+| **`run_single.py`** | 单文件 SfM，对应原 `run.py` 中 `type: sfm` 路径。推荐 **`--backend onnx`** 并指定 SuperPoint / SuperGlue 的 `.onnx`；`auto` 在缺少默认 ONNX 时会回退到 `torch_cpu`（需 PyTorch）。后处理中 3D 框过滤等为 NumPy 实现。 |
+| **`pipeline_single.py`** | 整合原 `pipeline.py` / `onnx_models.py` / `object_detector.py` 思路：含 `SuperPointOnnx`、`SuperGlueOnnx`、`GATsSPGOnnx`、`LocalFeatureObjectDetectorOnnx`、`OnnxOnePosePipeline`。检测器匹配打包为 **NumPy**，不依赖 PyTorch。 |
+| **`pipeline_online.py`** | 从 [`pipeline_online.yml`](pipeline_online.yml) 加载模型路径、数据根、`sfm_model_dir`、视频与运行时参数；`CameraPosePipeline.process_frame` 为单帧入口；`run_camera_loop` 驱动 `VideoFileSource`。检测器主路径仍通过临时灰度 PNG 与磁盘读图对齐（见 `camera_pipeline.md`）。 |
+| **`export_models.py`** | 从 PyTorch 权重导出三个 `.onnx`（需安装 PyTorch）。 |
+| **`benchmark.py`** | 固定演示数据上对比 PyTorch 与 ONNX 耗时与误差（可选依赖）。 |
+| **`pipeline.py` / `onnx_models.py` / `object_detector.py`** | 历史拆分文件；日常推理优先使用 **`pipeline_single.py`**。 |
 
-## 依赖
+---
 
-在项目根目录安装 OnePose 依赖，并额外安装：
+## 运行步骤
+
+### 环境
 
 ```bash
-pip install onnx onnxruntime
+pip install onnx onnxruntime opencv-python numpy scipy h5py omegaconf tqdm h5py natsort transforms3d
 ```
 
-（亦见仓库根目录 `requirements.txt` 中的 `onnx`、`onnxruntime` 条目。）
+- **仅 CPU、不装 PyTorch**：可走 ① → ②（`--backend onnx`）→ ③ / ④；`src/utils/data_utils.py` 对 `torch` 为函数内延迟导入，几何函数（`get_K`、裁剪）不触发 PyTorch。  
+- **导出 ONNX、`run_single --backend torch_cpu` 或 `benchmark` 的 PyTorch 分支**：需单独安装 PyTorch。
 
-导出 ONNX 时需要 **PyTorch** 与训练同款权重；运行 `pipeline` / `benchmark` 时需要 **OpenCV、NumPy** 及本仓库 `src/` 下的工具（如 `get_K`、`ransac_PnP`、`save_demo_image` 等）。
-
-## 目录与模型文件
-
-导出成功后，默认生成：
+模型默认放在本目录 `models/`：
 
 ```
 onnx_demo/models/
@@ -33,148 +53,112 @@ onnx_demo/models/
   gatsspg.onnx
 ```
 
-PyTorch 源权重默认路径（与 `export_models.py` 中一致）：
-
-- `data/models/extractors/SuperPoint/superpoint_v1.pth`
-- `data/models/matchers/SuperGlue/superglue_outdoor.pth`
-- `data/models/checkpoints/onepose/GATsSPG.ckpt`
+（导出见下文「导出 ONNX」。）
 
 ---
 
-## 一、如何使用 `pipeline.py`
+### 步骤 ①：解析扫描数据
 
-### 1. 类：`OnnxOnePosePipeline`
-
-在**项目根目录**下执行 Python，保证能 `import src`：
-
-```python
-import sys
-from pathlib import Path
-
-ROOT = Path("/path/to/OnePose")  # 替换为仓库根目录
-sys.path.insert(0, str(ROOT))
-
-from onnx_demo.pipeline import OnnxOnePosePipeline
-
-pipeline = OnnxOnePosePipeline(
-    superpoint_onnx=str(ROOT / "onnx_demo/models/superpoint.onnx"),
-    superglue_onnx=str(ROOT / "onnx_demo/models/superglue.onnx"),
-    gatsspg_onnx=str(ROOT / "onnx_demo/models/gatsspg.onnx"),
-    num_leaf=8,           # 与训练/推理配置一致，一般为 8
-    max_num_kp3d=2500,    # 预留参数，当前 pipeline 逻辑与 inference_demo 对齐时可保持默认
-)
-
-pred_poses, timing = pipeline.run_sequence(
-    data_root="/path/to/object_root",      # 含 box3d_corners.txt 的根目录
-    seq_dir="/path/to/object_root/seq_name",  # 测试序列目录（见下）
-    sfm_model_dir="/path/to/object_root/sfm_model",
-)
+```bash
+cd test_onnx/onnx_demo
+python parse_scanned_data.py --scanned_object_path /path/to/object_root
 ```
 
-### 2. `run_sequence` 参数含义
-
-| 参数 | 说明 |
-|------|------|
-| `data_root` | 物体数据根目录，需包含 `box3d_corners.txt`（`get_3d_box_path` 会解析） |
-| `seq_dir` | 当前测试序列目录，需包含 `color_full/*.png`、`intrinsics.txt` |
-| `sfm_model_dir` | SfM 输出根目录，其下需有 `outputs_superpoint_superglue/anno/`（`anno_3d_average.npz`、`anno_3d_collect.npz`、`idxs.npy`）以及 `outputs_superpoint_superglue/sfm_ws/model/`（COLMAP 模型，供检测器用） |
-
-### 3. 返回值
-
-- `pred_poses`：`dict`，键为帧序号 `int`，值为 `(pose_3x4, inliers)`。
-- `timing`：`dict`，键为 `detect` / `extract` / `match3d` / `pnp`，值为每帧耗时列表（秒）。
-
-### 4. 输出文件（由 `run_sequence` 内部写入）
-
-- 位姿可视化帧图：`{seq_dir}/pred_vis_onnx/{id}.jpg`
-- 演示视频：`{seq_dir}/demo_video_onnx.mp4`
-- 检测可视化目录：`{seq_dir}/detector_vis/`（若检测器有写盘逻辑）
-
-### 5. 实现说明（与 PyTorch 对齐时需注意）
-
-- GATsSPG 的 ONNX 图通常只包含 **三个描述子输入**（`descriptors2d_query`、`descriptors3d_db`、`descriptors2d_db`）；PyTorch 前向在空形状判断之后不再使用 2D/3D 关键点坐标，导出器可能去掉 `keypoints*`。`GATsSPGOnnx` 会按会话实际输入名喂数据，调用侧仍传入完整 `inp_data` 字典即可。
+`object_root` 下应含 `*-annotate`、`*-test` 等子目录（见脚本内说明）。
 
 ---
 
-## 二、如何导出 ONNX（export）
+### 步骤 ②：离线 SfM（生成 `sfm_model`）
 
-### 方式 A：模块入口（推荐）
+```bash
+python run_single.py \
+  --data-dir "/path/to/object_root object_name-annotate" \
+  --outputs-dir "/path/to/object_root/sfm_model" \
+  --backend onnx \
+  --detection-model ./models/superpoint.onnx \
+  --matching-model ./models/superglue.onnx
+```
 
-在**仓库根目录**执行：
+将 `object_name-annotate` 换成实际 annotate 序列目录名；`outputs-dir` 会按对象名 format（与脚本 `--help` 一致）。**务必使用 `--backend onnx`** 若部署环境无 PyTorch。
+
+---
+
+### 步骤 ③：离线序列验证（可选）
+
+编辑 `pipeline_single.py` 末尾 `main()` 中的 `data_root` / `seq_dir` / `sfm_model_dir` 与 `models/` 路径，或自行封装调用：
+
+```bash
+cd test_onnx/onnx_demo
+python pipeline_single.py
+# 仅前 N 帧调试：
+python pipeline_single.py --max_frames 40
+```
+
+输出包括 `pred_vis_onnx/`、`demo_video_onnx.mp4` 等（见脚本内路径逻辑）。
+
+---
+
+### 步骤 ④：在线视频推理
+
+1. 复制并编辑 [`pipeline_online.yml`](pipeline_online.yml)：设置 `input.video`、`data.*`、`models.onnx_dir` 或各 ONNX 绝对路径，必要时设置 `runtime.ref_width` / `ref_height` 与标定分辨率一致。  
+2. 运行：
+
+```bash
+cd test_onnx/onnx_demo
+python pipeline_online.py
+python pipeline_online.py --config /path/to/custom.yml
+```
+
+可选：`runtime.vis_dir` 非空时写出 `detect/`、`match/`、`pose/` 序列图；`runtime.max_frames`、`frame_stride` 用于调试。
+
+更完整的字段说明与任务记录见 **`camera_pipeline.md`** 第 11–12 节。
+
+---
+
+## 导出 ONNX
+
+在**仓库根目录**（或按包结构）执行：
 
 ```bash
 python -m onnx_demo.export_models
+# 或
+cd test_onnx/onnx_demo && python export_models.py
 ```
 
-将依次导出并校验三个模型到 `onnx_demo/models/`。
-
-### 方式 B：通过 `python -m onnx_demo`
-
-```bash
-# 仅导出，不跑推理/基准
-python -m onnx_demo --export_only
-```
-
-若 `onnx_demo/models/` 下已存在三个 `.onnx`，默认**不会**重复导出；需要重新导出时请**先删除**对应文件，或直接用法 A 覆盖。
-
-### 源权重与输出对应关系
-
-| 输出 | 源权重 |
-|------|--------|
-| `superpoint.onnx` | SuperPoint 密集骨干（NMS 等在 NumPy 侧完成） |
-| `superglue.onnx` | SuperGlue（归一化后的关键点与描述子为输入） |
-| `gatsspg.onnx` | `LitModelGATsSPG` 中的 2D-3D matcher |
-
-导出过程需要安装 `onnx` 包（用于 `onnx.checker.check_model`）。
+需要 PyTorch 与训练同款权重路径（见 `export_models.py` 内注释）。导出过程使用 `onnx` 包做 checker。
 
 ---
 
-## 三、如何运行 Benchmark
-
-`benchmark.py` 在**固定演示数据**上对比 PyTorch 与 ONNX：路径在文件内写死为 `data/demo/test_coffee`（`DATA_ROOT`、`SEQ_DIR`、`SFM_DIR`）。若使用自己的数据，需修改这些常量或自行封装调用 `run_pytorch_inference` / `run_onnx_inference`。
-
-### 命令行
+## Benchmark（可选）
 
 在仓库根目录：
 
 ```bash
-# 全流程：先 PyTorch 再 ONNX，生成对比视频、误差曲线与报告
 python -m onnx_demo.benchmark
-
-# 只处理前 N 帧（调试/快速验证）
 python -m onnx_demo.benchmark --max_frames 40
+python -m onnx_demo --onnx_only
 ```
 
-### 通过包入口（导出 + 基准）
+默认数据路径写在 `benchmark.py` 内；使用自有数据需改常量或自行封装。输出见 `benchmark_results/` 与序列目录下的对比视频。
 
-```bash
-python -m onnx_demo --skip_export          # 已有 onnx，直接跑 PyTorch vs ONNX 基准
-python -m onnx_demo --max_frames 40        # 限制帧数
-python -m onnx_demo --onnx_only            # 仅 ONNX 推理与计时，不跑 PyTorch
-python -m onnx_demo --export_only          # 仅导出
-```
+---
 
-### 输出位置（默认）
+## 与旧版 `pipeline.py` 文档的关系
 
-| 产物 | 路径 |
-|------|------|
-| 文本报告 | `onnx_demo/benchmark_results/benchmark_report.txt` |
-| 并排对比视频 | `onnx_demo/benchmark_results/comparison_video.mp4` |
-| 逐帧旋转/平移误差曲线 | `onnx_demo/benchmark_results/error_curves.png` |
-| PyTorch 可视化视频 | `data/demo/test_coffee/test_coffee-test/demo_video_pytorch.mp4` |
-| ONNX 可视化视频 | `data/demo/test_coffee/test_coffee-test/demo_video_onnx.mp4` |
-
-报告中含各阶段平均耗时（ms/帧）、PyTorch 与 ONNX 位姿之间的旋转误差（度）与平移误差（厘米）等统计量。
+若文档仍写「`from onnx_demo.pipeline import OnnxOnePosePipeline`」，请改为 **`pipeline_single.OnnxOnePosePipeline`**，并将 `sys.path` 指向本目录（`onnx_demo`），以便 `import src.utils`。
 
 ---
 
 ## 常见问题
 
-1. **强制重新导出 ONNX**  
-   删除 `onnx_demo/models/*.onnx` 后重新执行 `python -m onnx_demo.export_models`，或使用 `--export_only`（在不存在 onnx 时会导出；若已存在则需先删文件）。
+1. **`run_single` 意外使用 PyTorch**  
+   使用 `--backend onnx` 并保证 `--detection-model` / `--matching-model` 指向存在的 `.onnx`；或设置环境变量 `ONEPOSE_SUPERPOINT_ONNX` / `ONEPOSE_SUPERGLUE_ONNX`，避免 `auto` 回退到 `torch_cpu`。
 
-2. **Benchmark 找不到数据**  
-   确认 `data/demo/test_coffee/...` 与 `sfm_model` 已按官方流程生成；或修改 `benchmark.py` 顶部路径指向你的序列。
+2. **内参与视频分辨率不一致**  
+   在 `pipeline_online.yml` 的 `runtime` 中填写 `ref_width`、`ref_height`（标定时的宽高），运行时会缩放 `K`。
 
 3. **性能**  
-   当前默认在 ONNX Runtime 中使用 **CPU**（`CPUExecutionProvider`）。生产环境可按目标平台切换 Execution Provider（如 CUDA、TensorRT）并调线程数。
+   默认 ONNX Runtime 为 **CPU**；可在 `_get_session` / 会话选项中更换 Execution Provider 或线程数（见 `pipeline_single.py`）。
+
+4. **完整设计、YAML 字段、测试用例 ID**  
+   见 **[`camera_pipeline.md`](camera_pipeline.md)**。

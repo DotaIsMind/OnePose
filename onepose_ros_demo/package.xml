@@ -20,6 +20,9 @@
   <depend>geometry_msgs</depend>
   <depend>cv_bridge</depend>
 
+  <!-- Launch files resolve bundled onnx_demo under lib/<pkg>/ via ament index -->
+  <exec_depend>ament_index_python</exec_depend>
+
   <!-- Custom message package (built alongside this package) -->
   <depend>rosidl_default_generators</depend>
   <member_of_group>rosidl_interface_packages</member_of_group>

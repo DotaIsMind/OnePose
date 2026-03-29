@@ -176,10 +176,10 @@ class OnnxOnePosePipeline:
         pred_poses : {frame_id: (pose_3x4, inliers)}
         timing     : dict with per-stage timing info
         """
-        from onnx_demo.utils.data_utils import get_K, pad_features3d_random
-        from onnx_demo.utils.path_utils import get_3d_box_path
-        from onnx_demo.utils.eval_utils import ransac_PnP
-        from onnx_demo.utils.vis_utils import save_demo_image, make_video
+        from src.utils.data_utils import get_K, pad_features3d_random
+        from src.utils.path_utils import get_3d_box_path
+        from src.utils.eval_utils import ransac_PnP
+        from src.utils.vis_utils import save_demo_image, make_video
 
         img_lists, paths = _get_paths(data_root, seq_dir, sfm_model_dir)
 

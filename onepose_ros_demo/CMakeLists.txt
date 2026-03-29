@@ -50,6 +50,14 @@ install(
   DESTINATION share/${PROJECT_NAME}/config
 )
 
+# ── install demo / object datasets (under share so launch can use get_package_share_directory) ──
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/data")
+  install(
+    DIRECTORY data/
+    DESTINATION share/${PROJECT_NAME}/data
+  )
+endif()
+
 # ── install bundled Python dependency packages ────────────────────────────────
 # onnx_demo is a pure-Python package bundled inside this ROS package
 # so that onepose_ros_demo can be built and run without the parent repo.
