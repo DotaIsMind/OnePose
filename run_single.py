@@ -255,7 +255,7 @@ def _extract_features_onnx(img_lists: list, feature_out: str, cfg):
 
     sp_onnx = os.environ.get(
         "ONEPOSE_SUPERPOINT_ONNX",
-        str(ROOT / "data/models/onnx/superpoint_v1.onnx"),
+        str(ROOT / "data/models/onnx/superpoint.onnx"),
     )
     if not osp.isfile(sp_onnx):
         raise FileNotFoundError(
@@ -284,7 +284,7 @@ def _extract_features_onnx(img_lists: list, feature_out: str, cfg):
 def _match_features_onnx(cfg, feature_path: str, covis_pairs: str, matches_out: str):
     sg_onnx = os.environ.get(
         "ONEPOSE_SUPERGLUE_ONNX",
-        str(ROOT / "data/models/onnx/superglue_outdoor.onnx"),
+        str(ROOT / "data/models/onnx/superglue.onnx"),
     )
     if not osp.isfile(sg_onnx):
         raise FileNotFoundError(
@@ -479,11 +479,11 @@ def sfm_core_run(cfg, img_lists: list, outputs_dir_root: str, backend: str):
         if be == "auto":
             sp_def = os.environ.get(
                 "ONEPOSE_SUPERPOINT_ONNX",
-                str(ROOT / "data/models/onnx/superpoint_v1.onnx"),
+                str(ROOT / "data/models/onnx/superpoint.onnx"),
             )
             sg_def = os.environ.get(
                 "ONEPOSE_SUPERGLUE_ONNX",
-                str(ROOT / "data/models/onnx/superglue_outdoor.onnx"),
+                str(ROOT / "data/models/onnx/superglue.onnx"),
             )
             be = "onnx" if (osp.isfile(sp_def) and osp.isfile(sg_def)) else "torch_cpu"
             logging.info("auto backend -> %s", be)

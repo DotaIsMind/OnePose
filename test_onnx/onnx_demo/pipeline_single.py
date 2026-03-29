@@ -721,7 +721,7 @@ def main():
 
     _ensure_import_path()
 
-    _demo_root = Path("/raid/tengf/6d-pose-resource/OnePose/data/demo/test_coffee")
+    _demo_root = Path("/home/data/qrb_ros_simulation_ws/OnePose-main/data/demo/test_coffee")
     data_root = str(_demo_root)
     seq_dir = str(_demo_root / "test_coffee-test")
     sfm_model_dir = str(_demo_root / "sfm_model")
