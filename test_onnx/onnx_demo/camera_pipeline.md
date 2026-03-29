@@ -1,12 +1,35 @@
 # 相机视频流 Pose Estimation 设计文档
 
-本文档基于对 `run_single.py` 与 `test_onnx/onnx_demo/pipeline_single.py` 的代码审阅，说明如何将 OnePose 从**离线图像序列**扩展到**相机视频流**输入，并给出可实现的 API 设计与测试用例。
+本文档描述 **ONNX 部署路径**下，从原始扫描数据到在线位姿估计的完整链路，并说明 `pipeline_online.py` 如何将 OnePose 从**离线图像序列**扩展到**相机视频流**输入。设计要点与 `test_onnx/onnx_demo/` 内四脚本及 ROS 集成点对齐。
+
+---
+
+## 0. 端到端四脚本（完整 Pose Estimation Pipeline）
+
+下列脚本按**数据流顺序**组成可复现的部署流水线（均在 `test_onnx/onnx_demo/` 下，除非另注）：
+
+| 顺序 | 脚本 | 阶段 | 产出 / 作用 |
+|------|------|------|----------------|
+| ① | `parse_scanned_data.py` | 数据准备 | 从 ARKit 等扫描目录解析视频与位姿，生成 `intrinsics.txt`、`box3d_corners.txt`、`color/`、`color_full/`、`poses` 等，供后续 SfM 与测试序列使用 |
+| ② | `run_single.py` | 离线 SfM（一次） | COLMAP 三角化 + 后处理，生成 `sfm_model_dir/outputs_superpoint_superglue/{anno,sfm_ws/model}`；**推荐 `--backend onnx`**，与在线推理一致 |
+| ③ | `pipeline_single.py` | 离线逐帧推理（验证） | 单文件整合 SP/SG/GAT 检测与 2D–3D 匹配；`OnnxOnePosePipeline.run_sequence` 读 `color_full/*.png`，输出位姿与 `demo_video_onnx.mp4` |
+| ④ | `pipeline_online.py` | 在线视频 / 相机流 | `CameraPosePipeline` + YAML：`FrameInput`（灰度 + K）→ 每帧 `PoseEstimationResult`；检测器仍通过临时 PNG 与 `LocalFeatureObjectDetectorOnnx` 对齐 |
+
+**依赖关系**：④ 依赖 ② 的 `sfm_model_dir` 与 ① 的 `data_root`（3D 框）；③ 与 ④ 并行用于验证，不互为前置。①② 为物体首次部署的**离线**阶段。
 
 ---
 
 ## 1. 现有代码职责划分
 
-### 1.1 `run_single.py`（SfM 离线重建）
+### 1.1 `parse_scanned_data.py`（扫描数据预处理）
+
+| 能力 | 说明 |
+|------|------|
+| 输入 | `--scanned_object_path` 下各子目录（`*-annotate` / `*-test`） |
+| 输出 | annotate：`color/`、`poses/`、`intrinsics.txt`、`box3d_corners.txt` 等；test：`color_full/`、`intrinsics.txt` |
+| 与在线推理关系 | 为 `run_single.py` 与 `pipeline_online.yml` 中的 `data_root` / `seq_dir` 提供**目录与文件布局**；**不执行**位姿估计 |
+
+### 1.2 `run_single.py`（SfM 离线重建）
 
 | 能力 | 说明 |
 |------|------|
@@ -15,9 +38,9 @@
 | 输出 | COLMAP 三角化、`sfm_ws/model`、经 3D 包围盒过滤后的 `anno`（`anno_3d_*.npz` 等） |
 | 与在线推理关系 | **不直接做逐帧位姿**；为 `pipeline_single.py` 提供必须先完成的**物体模型与标注** |
 
-**结论**：视频流 pose estimation **依赖** `run_single.py`（或等价 `run.py` SfM 流程）事先产出的 `sfm_model_dir`，运行时不再重复跑 SfM。
+**结论**：视频流 pose estimation **依赖** `run_single.py`（或等价 `run.py` SfM 流程）事先产出的 `sfm_model_dir`，运行时不再重复跑 SfM。无 GPU / 希望部署环境**不装 PyTorch** 时，请固定 **`--backend onnx`** 并配置有效的 SuperPoint / SuperGlue `.onnx` 路径，避免 `auto` 在缺少默认 ONNX 时回退到 `torch_cpu`（后者会 `import torch` 并调用原 SfM 特征脚本）。
 
-### 1.2 `pipeline_single.py`（ONNX 推理流水线）
+### 1.3 `pipeline_single.py`（ONNX 推理流水线）
 
 | 组件 | 作用 |
 |------|------|
@@ -27,12 +50,23 @@
 | `LocalFeatureObjectDetectorOnnx` | 用 SfM 参考视图建立 DB，对当前帧做匹配 + RANSAC 仿射 → 裁剪 ROI |
 | `OnnxOnePosePipeline.run_sequence` | 读 `color_full/*.png` 序列，逐帧：检测 → 裁剪 → 特征 → 3D 匹配 → `ransac_PnP` |
 
-**与视频流的差距**：
+**与 `pipeline_online.py` 的关系**：
 
-- `run_sequence` 强依赖**磁盘路径**（`cv2.imread`、`img_path` 传入 `detector.detect` / `previous_pose_detect`）。
-- `LocalFeatureObjectDetectorOnnx.crop_img_by_bbox` 内部对**整图**再次 `cv2.imread(query_img_path)`，视频流应改为**纯内存**的 `crop + resize`（与 `pose_estimation_node.py` 中写临时文件 workaround 思路一致，长期应 API 化）。
+- `run_sequence` 强依赖**磁盘图像路径**（`cv2.imread`、`img_path` 传入检测器）。
+- `pipeline_online.py` 中 **`CameraPosePipeline.process_frame`** 与之单帧逻辑对齐，但通过 `cv2.imwrite` 将灰度写入 `CameraPipelineConfig.tmp_gray_path` 再调用 `detect` / `previous_pose_detect`，与 ROS 节点临时图方案一致。
+- **已实现（部分内存路径）**：`pipeline_online.py` 中当检测框面积超过 `detector.bbox_max_area_ratio` 时，使用 `_crop_resize_from_gray` 在内存中重算裁剪与 `K_crop`，不依赖该分支下的磁盘读图；**主检测分支** `LocalFeatureObjectDetectorOnnx.detect` / `previous_pose_detect` 仍通过 `cv2.imread(tmp_gray_path)` 读临时 PNG。
+- **仍建议后续实现**：在 `LocalFeatureObjectDetectorOnnx` 增加全路径 `detect_from_array`（或统一走 `crop_img_by_bbox` 的 ndarray 接口），去掉每帧写临时 PNG（见第 5 节）。
+
+### 1.4 `pipeline_online.py`（在线 ONNX 流水线）
+
+| 组件 | 作用 |
+|------|------|
+| `load_online_yaml` | 从 `pipeline_online.yml` 解析模型路径、`data_root` / `sfm_model_dir`、运行时与检测器参数 |
+| `CameraPosePipeline` | 加载 ONNX 与 `anno`/`npz`，`process_frame(FrameInput) -> PoseEstimationResult` |
+| `VideoFileSource` + `run_camera_loop` | 离线视频模拟相机；可选 `vis_dir` 写出 `detect/`、`match/`、`pose/` 序列图 |
 
 ---
+
 
 ## 2. 设计目标
 
@@ -65,7 +99,7 @@ flowchart LR
 
 ## 4. 数据结构与配置 API
 
-### 4.1 `CameraPipelineConfig`（建议）
+### 4.1 `CameraPipelineConfig`（与 `pipeline_online.py` 一致）
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
@@ -73,12 +107,21 @@ flowchart LR
 | `superglue_onnx` | `str` | SuperGlue ONNX（检测器） |
 | `gatsspg_onnx` | `str` | GATsSPG ONNX（2D–3D） |
 | `sfm_model_dir` | `str` | 含 `outputs_superpoint_superglue/` 的根目录 |
-| `data_root` | `str` | 物体数据根（用于 `get_3d_box_path` 等，与现流水线一致） |
-| `num_leaf` | `int` | 默认 `8`，同 `OnnxOnePosePipeline` |
+| `data_root` | `str` | 物体数据根（用于 `get_3d_box_path` 等） |
+| `intrinsics_path` | `str` | 全图内参文件（通常 `seq_dir/intrinsics.txt`） |
+| `num_leaf` | `int` | 默认 `8` |
 | `max_num_kp3d` | `int` | 默认 `2500` |
-| `sp_config` | `dict \| None` | 传入 `SuperPointOnnx`，与 `pipeline_single` 对齐 |
+| `sp_config` | `dict \| None` | 传入 `SuperPointOnnx` |
 | `crop_size` | `int` | 默认 `512` |
-| `use_temp_file_for_detect` | `bool` | 兼容旧 `detect(query_img_path)`：若 `True` 则写临时 PNG（与现 ROS 节点一致）；目标实现应支持 `False` + 内存裁剪 |
+| `tmp_gray_path` | `str` | 每帧灰度临时图路径（供 `LocalFeatureObjectDetectorOnnx` 读图），默认 `/tmp/onepose_online_query_gray.png` |
+| `tmp_bgr_path` | `str` | 可视化时 BGR 临时图，供 `save_demo_image` |
+| `min_inliers_for_prev_pose` | `int` | 低于此内点数则走全图 `detect`（默认 8） |
+| `min_inliers_ok` | `int` | `PoseEstimationResult.ok` 阈值（默认 6） |
+| `detector_n_ref_view` | `int` | SfM 参考视图采样数 |
+| `detector_bbox_max_area_ratio` | `float \| None` | 仿射框面积占比上限；过大时触发中心 ROI 回退 |
+| `detector_fallback_center_scale` | `float` | 回退窗口相对 `min(W,H)` 比例 |
+
+YAML 中对应 `pipeline.*`、`detector.*`、`superpoint.*`、`models.*`、`data.*`；**无** `use_temp_file_for_detect` 字段——临时文件行为由 `tmp_gray_path` / `tmp_bgr_path` 固定表达。
 
 ### 4.2 `FrameInput`
 
@@ -106,7 +149,7 @@ flowchart LR
 
 ## 5. 核心类 API 设计
 
-### 5.1 `CameraPosePipeline`
+### 5.1 `CameraPosePipeline`（已在 `pipeline_online.py` 实现）
 
 负责加载模型与 3D 标注缓存（对应 `OnnxOnePosePipeline.__init__` + `run_sequence` 中 `avg_data/clt_data/idxs` 加载）。
 
@@ -123,16 +166,17 @@ class CameraPosePipeline:
 
 **内部行为（与 `run_sequence` 对齐）**：
 
-1. `frame_id == 0` 或 `上一帧 inliers < 8`：`LocalFeatureObjectDetectorOnnx.detect`（全图或内存路径）。
-2. 否则：`previous_pose_detect`（需 `bbox3d`、`pre_pose`）。
-3. `SuperPointOnnx` 对 crop 提取 `kpts2d, desc2d`。
-4. `GATsSPGOnnx` 2D–3D 匹配。
-5. `ransac_PnP(K_crop, mkpts2d, mkpts3d, ...)`。
+1. `frame_id == 0` 或 `上一帧 inliers < min_inliers_for_prev_pose`：`LocalFeatureObjectDetectorOnnx.detect`（灰度先写入 `tmp_gray_path`，再 `cv2.imread`）。
+2. 否则：`previous_pose_detect`（同上依赖临时图路径）。
+3. 可选：若仿射框面积占比过大，用 `_crop_resize_from_gray` 在内存中替换裁剪与 `K_crop`（见 §1.3）。
+4. `SuperPointOnnx` 对 crop 提取 `kpts2d, desc2d`。
+5. `GATsSPGOnnx` 2D–3D 匹配。
+6. `ransac_PnP(K_crop, mkpts2d, mkpts3d, ...)`。
 
-**必须补充的私有方法（实现细节）**：
+**与早期设计草案的差异（已实现 vs 待办）**：
 
-- `_detect_and_crop_in_memory(gray, K)`：替代依赖 `query_img_path` 的读写；逻辑复制 `crop_img_by_bbox` + `get_image_crop_resize` / `get_K_crop_resize`，输入为 `np.ndarray`。
-- 若短期内保留临时文件：`_detect_and_crop_via_tmp(gray, K)` 调用现有 `detect(..., _TMP_IMG_PATH)`。
+- **已实现**：每帧 `cv2.imwrite` 临时灰度图 + `process_frame` 内中心 ROI 回退时的 `_crop_resize_from_gray`（与 `crop_img_by_bbox` 几何一致）。
+- **待办（可选优化）**：`_detect_and_crop_in_memory` 全路径替代 `query_img_path` / 临时文件，需扩展 `LocalFeatureObjectDetectorOnnx` 或在其内部对 `crop_img_by_bbox` 支持 ndarray 输入。
 
 ### 5.2 `VideoSource`（抽象，便于测试）
 
@@ -150,20 +194,33 @@ class VideoSource(Protocol):
 - `OpenCVCameraSource(device_id: int, width: int, height: int)`
 - `VideoFileSource(path: str)`（离线视频回归测试）
 
-### 5.3 `run_camera_loop`（可选 CLI / 脚本入口）
+### 5.3 `run_camera_loop`（`pipeline_online.py` 已实现）
+
+当前实现以 **`VideoFileSource`**（`cv2.VideoCapture`）为帧源，签名如下（无 `display` 参数；可视化通过 `vis_dir` 写盘）：
 
 ```python
 def run_camera_loop(
     pipeline: CameraPosePipeline,
-    source: VideoSource,
+    source: VideoFileSource,
     K: np.ndarray,
     *,
     max_frames: int | None = None,
-    display: bool = False,
     vis_dir: str | None = None,
+    frame_stride: int = 1,
 ) -> list[PoseEstimationResult]:
-    """从 VideoSource 连续 read，直到 EOF 或 max_frames。"""
+    """从视频连续 read，直到 EOF 或 max_frames；可选写出 detect/match/pose 序列图。"""
 ```
+
+扩展 USB 摄像头等时，可实现与 `VideoFileSource` 相同接口（`read` / `width` / `height` / `release`）或引入通用 `Protocol` 再放宽类型注解。
+
+---
+
+### 5.4 仅 CPU / ONNX 部署时的依赖说明（与代码一致）
+
+- **ONNX Runtime**：`SuperPointOnnx` / `SuperGlueOnnx` / `GATsSPGOnnx` 及 `run_single.py` 的 ONNX 分支均使用 **`CPUExecutionProvider`**。
+- **`src/utils/data_utils.py`**：`torch` 改为**函数内延迟导入**，仅调用 `get_K`、`get_image_crop_resize`、`get_K_crop_resize` 等几何时**无需安装 PyTorch**（`parse_scanned_data.py`、检测器用到的裁剪路径受益）。
+- **`pipeline_single.py`**：检测器匹配打包 `_pack_match_data` 使用 **NumPy**，不依赖 `torch`；GAT 输出侧 `_NumpyTensor` 与 ORT 输出对齐。
+- **`run_single.py`**：仅 `--backend onnx` 时 SfM 特征/匹配不经过 PyTorch；`torch_cpu` / `auto` 回退仍需要 PyTorch。
 
 ---
 
@@ -174,7 +231,7 @@ def run_camera_loop(
 | 输入 | 数据集 png 列表 | `color_full/*.png` | `FrameInput.gray` + `K` |
 | SfM | 执行 | 不执行（读现成 model） | 不执行 |
 | 输出 | 模型与 anno | 每帧 pose + mp4 | 每帧 `PoseEstimationResult` |
-| 路径依赖 | 图像路径 | 强依赖 | **消除对帧文件路径的硬依赖**（推荐） |
+| 路径依赖 | 图像路径 | 强依赖 `color_full/*.png` | 每帧为 ndarray + `K`；检测器仍通过**临时 PNG** 读图（见 §1.3 / §5.1），非完全无盘 |
 
 ---
 
@@ -197,7 +254,7 @@ def run_camera_loop(
 |----|------|----------|------|------|
 | UT-01 | `SuperPointOnnx` 形状 | 有效 ONNX | 输入 `(1,1,H,W)` float32 | `keypoints` 为 `(N,2)`，`descriptors` 为 `(256,N)` |
 | UT-02 | `FrameInput` 校验 | — | `gray` 为 `(H,W)` uint8，`K` 为 3×3 | 构造成功；错误 dtype/shape 时抛清晰异常（若实现校验） |
-| UT-03 | 内存裁剪一致性 | 同一张图 | 对同 `bbox,K` 比较 `crop_img_by_bbox(path)` 与 `_detect_and_crop_in_memory` | 像素最大差 ≤ 1（允许舍入） |
+| UT-03 | 内存裁剪一致性 | 同一张图 | 对同 `bbox,K` 比较 `crop_img_by_bbox(path)` 与 `pipeline_online._crop_resize_from_gray` | 像素最大差 ≤ 1（允许舍入） |
 | UT-04 | `reset` | pipeline 已跑多帧 | 调用 `reset()` 再 `process_frame` | 行为等价于首帧（走全图 detect 分支） |
 
 ### 8.2 集成测试（需 demo 数据与 ONNX）
@@ -225,12 +282,14 @@ def run_camera_loop(
 
 ---
 
-## 9. 实现顺序建议
+## 9. 实现顺序建议（历史；当前仓库状态）
 
-1. 从 `OnnxOnePosePipeline.run_sequence` 抽出 **`_process_single_frame`** 逻辑，输入改为 `FrameInput`，输出 `PoseEstimationResult`。
-2. 实现 **`_detect_and_crop_in_memory`**（或临时文件版先打通）。
-3. 添加 **`CameraPosePipeline`** + **`run_camera_loop`** + **单元/集成测试**。
-4. 可选：合并 **ROS 节点** 与共享模块，删除重复代码。
+以下步骤已在 `pipeline_online.py` 中落地：**`CameraPosePipeline.process_frame`**、临时灰度图打通、`run_camera_loop`、`load_online_yaml`。尚未完成的主要为 **全路径无临时文件的检测器**（见 §5.1）及 ROS 节点与共享类的进一步合并。
+
+1. ~~从 `OnnxOnePosePipeline.run_sequence` 抽出单帧逻辑~~ → 已由 `CameraPosePipeline` 与 `pipeline_single` 共享组件对齐。
+2. ~~临时文件版打通~~ → 已实现；内存裁剪仅覆盖中心 ROI 回退分支。
+3. ~~`CameraPosePipeline` + `run_camera_loop`~~ → 已实现。
+4. 可选：合并 **ROS 节点** 与 `CameraPosePipeline`；扩展 **`detect_from_array`**。
 
 ---
 
@@ -387,4 +446,4 @@ python pipeline_online.py --config /path/to/custom.yml
 
 ---
 
-*文档版本：与仓库审阅时 `run_single.py`、`pipeline_single.py` 行为一致；实现时以实际代码为准。*
+*文档版本：与 `parse_scanned_data.py`、`run_single.py`、`pipeline_single.py`、`pipeline_online.py` 及 `src/utils/data_utils.py`（torch 延迟导入）对齐；实现细节以代码为准。*
