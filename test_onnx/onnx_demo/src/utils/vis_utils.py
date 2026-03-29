@@ -407,16 +407,24 @@ def draw_pose_axes(image, pose_homo, K, axis_length=0.05, linewidth=3):
     z_end_3d  = np.array([[0.0,         0.0,          axis_length]])
 
     # Project all four points to 2D
-    origin_2d = reproj(K, pose_homo, origin_3d)[0].astype(int)
-    x_end_2d  = reproj(K, pose_homo, x_end_3d )[0].astype(int)
-    y_end_2d  = reproj(K, pose_homo, y_end_3d )[0].astype(int)
-    z_end_2d  = reproj(K, pose_homo, z_end_3d )[0].astype(int)
+    origin_2d = reproj(K, pose_homo, origin_3d)[0]
+    x_end_2d = reproj(K, pose_homo, x_end_3d)[0]
+    y_end_2d = reproj(K, pose_homo, y_end_3d)[0]
+    z_end_2d = reproj(K, pose_homo, z_end_3d)[0]
 
+    pts = np.stack([origin_2d, x_end_2d, y_end_2d, z_end_2d], axis=0)
+    if not np.isfinite(pts).all():
+        return image
+
+    def _pt_int(p):
+        return (int(round(float(p[0]))), int(round(float(p[1]))))
+
+    oi = _pt_int(origin_2d)
     # BGR colour for each axis: X=Red, Y=Green, Z=Blue
     axes = [
-        (x_end_2d, (0,   0,   255)),   # X – Red
-        (y_end_2d, (0,   255, 0  )),   # Y – Green
-        (z_end_2d, (255, 0,   0  )),   # Z – Blue
+        (_pt_int(x_end_2d), (0, 0, 255)),
+        (_pt_int(y_end_2d), (0, 255, 0)),
+        (_pt_int(z_end_2d), (255, 0, 0)),
     ]
 
     h, w = image.shape[:2]
@@ -424,12 +432,12 @@ def draw_pose_axes(image, pose_homo, K, axis_length=0.05, linewidth=3):
     def _in_image(pt):
         return 0 <= pt[0] < w and 0 <= pt[1] < h
 
-    if _in_image(origin_2d):
+    if _in_image(oi):
         for end_2d, color in axes:
             cv2.arrowedLine(
                 image,
-                tuple(origin_2d),
-                tuple(end_2d),
+                oi,
+                end_2d,
                 color,
                 linewidth,
                 cv2.LINE_AA,
@@ -478,7 +486,8 @@ def save_demo_image(
 
     if draw_box:
         reproj_box_2d = reproj(K, pose_pred, box3d)
-        draw_3d_box(image_full, reproj_box_2d, color='b', linewidth=10)
+        if np.isfinite(reproj_box_2d).all():
+            draw_3d_box(image_full, reproj_box_2d, color='b', linewidth=10)
     
     if draw_axes:
         # Use pose_homo when provided, otherwise fall back to pose_pred

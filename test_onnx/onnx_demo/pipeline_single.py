@@ -298,13 +298,22 @@ class LocalFeatureObjectDetectorOnnx:
         detect_save_dir: str | None = None,
         K_crop_save_dir: str | None = None,
         sp_config: dict | None = None,
+        bbox_max_area_ratio: float | None = None,
     ):
         self.extractor = SuperPointOnnx(superpoint_onnx_path, config=sp_config)
         self.matcher = SuperGlueOnnx(superglue_onnx_path)
         self.output_results = output_results
         self.detect_save_dir = detect_save_dir
         self.K_crop_save_dir = K_crop_save_dir
+        self.bbox_max_area_ratio = bbox_max_area_ratio
         self.db_dict = self._extract_ref_view_features(sfm_ws_dir, n_ref_view)
+
+    @staticmethod
+    def _bbox_area_ratio(bbox: np.ndarray, img_h: int, img_w: int) -> float:
+        x0, y0, x1, y1 = bbox.astype(float)
+        area = max(0.0, x1 - x0) * max(0.0, y1 - y0)
+        denom = float(img_h * img_w) if img_h * img_w > 0 else 1.0
+        return area / denom
 
     def _extract_ref_view_features(self, sfm_ws_dir: str, n_ref_views: int) -> dict:
         from src.utils.colmap.read_write_model import read_model
@@ -371,7 +380,25 @@ class LocalFeatureObjectDetectorOnnx:
 
     def _detect_by_matching(self, query: dict) -> np.ndarray:
         results = self._match_worker(query)
-        best_idx = max(results, key=lambda k: results[k]["inliers"].shape[0])
+        h, w = int(query["size"][0]), int(query["size"][1])
+        thr = self.bbox_max_area_ratio
+        if thr is not None and thr > 0:
+            filtered = {
+                k: v
+                for k, v in results.items()
+                if self._bbox_area_ratio(v["bbox"], h, w) <= thr
+            }
+            if filtered:
+                results = filtered
+            best_idx = max(
+                results,
+                key=lambda k: (
+                    results[k]["inliers"].shape[0],
+                    -self._bbox_area_ratio(results[k]["bbox"], h, w),
+                ),
+            )
+        else:
+            best_idx = max(results, key=lambda k: results[k]["inliers"].shape[0])
         return results[best_idx]["bbox"]
 
     def crop_img_by_bbox(

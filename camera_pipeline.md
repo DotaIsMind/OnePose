@@ -238,19 +238,69 @@ def run_camera_loop(
 
 | 文件 | 用途 |
 |------|------|
-| `run_single.py` | 离线 SfM + anno，视频流前置依赖 |
-| `test_onnx/onnx_demo/pipeline_single.py` | ONNX 检测、2D–3D 匹配、PnP 参考实现 |
-| `onepose_ros_demo/onepose_ros_demo/pose_estimation_node.py` | 相机话题、临时图、与流水线对接的现有工程化示例 |
+| `scripts/demo_pipeline.sh` | 官方示例：解析数据 → Hydra SfM → `inference_demo.py` 推理 |
+| `parse_scanned_data.py` | 从 ARKit 扫描数据生成 `intrinsics.txt`、`color/`、`box3d_corners.txt`、测试序列 `color_full/` 等 |
+| `run.py` / `run_single.py` | 离线 SfM + `outputs_superpoint_superglue/`（`anno`、`sfm_ws/model`）；**ONNX 在线推理依赖后者** |
+| `inference_demo.py` | PyTorch 侧与 `pipeline_online` 同级的「逐帧位姿 + 可视化」 |
+| `test_onnx/onnx_demo/pipeline_single.py` | ONNX 检测、2D–3D 匹配、PnP |
+| `test_onnx/onnx_demo/pipeline_online.py` | 视频流 + YAML 配置的在线 ONNX 流水线 |
+| `onepose_ros_demo/onepose_ros_demo/pose_estimation_node.py` | ROS2 相机话题、临时图适配检测器 |
 
 ---
 
-*文档版本：与仓库审阅时 `run_single.py`、`pipeline_single.py` 行为一致；实现时以实际代码为准。*
+## 11. 端到端流水线拆解（与 `demo_pipeline.sh` 对齐）
 
-## 11.任务目标
+下列顺序对应仓库内**从原始扫描到可跑位姿估计**的依赖关系；`pipeline_online.py` 只覆盖其中**在线推理**一段，且要求上游产物已就绪。
+
+```mermaid
+flowchart TB
+  subgraph prep [数据准备]
+    P1[parse_scanned_data.py<br/>annotate + test 序列]
+    P2[Frames.m4v / Frames.txt / Box.txt 等]
+    P1 --> P3[intrinsics.txt / box3d_corners.txt / color_full 等]
+    P2 --> P1
+  end
+  subgraph sfm [离线重建一次]
+    R1[run.py 或 run_single.py<br/>SuperPoint+SuperGlue+COLMAP]
+    P3 --> R1
+    R1 --> R2[sfm_model / outputs_superpoint_superglue<br/>anno + sfm_ws/model]
+  end
+  subgraph online [在线每帧]
+    O1[pipeline_online.py 或 inference_demo.py]
+    R2 --> O1
+    V[Frames.m4v 或相机] --> O1
+    O1 --> O2[R,t / 可视化]
+  end
+```
+
+| 步骤 | 脚本 / 入口 | 输入 | 输出（与 OnePose 约定相关） |
+|------|-------------|------|---------------------------|
+| 1 | `parse_scanned_data.py --scanned_object_path data/demo/$OBJ`（`demo_pipeline.sh` 6–12 行） | 各序列下 `Frames.m4v`、`Frames.txt`、`Box.txt`、`ARposes.txt` 等 | 物体根目录 `box3d_corners.txt`；annotate 的 `color/`、位姿；test 的 `color_full/`、`intrinsics.txt` 等 |
+| 2 | `run.py +preprocess=sfm_spp_spg_demo ...`（`demo_pipeline.sh` 14–21 行）或等价 `run_single.py` | 同上解析后的目录 | `.../sfm_model/outputs_superpoint_superglue/{anno,sfm_ws/model}` |
+| 3 | `inference_demo.py`（`demo_pipeline.sh` 35–40 行） | `color_full`、`sfm_model`、内参 | 逐帧位姿与 demo 视频 |
+| 3′ | **`pipeline_online.py`**（本设计扩展） | **同一物体**的 `Frames.m4v` + `intrinsics.txt` + **同一物体**的 `sfm_model_dir` + `data_root`（`box3d`）+ ONNX | 逐帧位姿；可选 `outputs/{detect,match,pose}/` |
+
+**数据一致性（必查）**
+
+| 项 | 说明 |
+|----|------|
+| **物体一致** | `data.sfm_model_dir` 必须由**该物体**的 annotate 序列跑出的 SfM 得到。用物体 A 的 COLMAP 参考图去匹配物体 B 的视频时，SuperGlue 仍可能给出高内点数的错误仿射，导致检测框覆盖绝大部分图像。 |
+| **内参与分辨率** | `seq_dir/intrinsics.txt` 应对应 `Frames.m4v` 的像素尺寸；若标定分辨率与视频不一致，须在 YAML `runtime.ref_width` / `ref_height` 中填写标定宽高并做 K 缩放（见 11.3 / EX-03）。 |
+| **Franzzi 示例布局** | 物体根：`data/onepose_datasets/sample_data/0501-matchafranzzi-box/`（`box3d_corners.txt`）；SfM 产物示例：`data/sfm_model/0501-matchafranzzi-box/`；测试序列：`.../matchafranzzi-3/`（`intrinsics.txt` + `Frames.m4v`）。三者需同时写入 `pipeline_online.yml`。 |
+
+**检测异常时的工程手段（`pipeline_online` 已实现）**
+
+- **`detector.bbox_max_area_ratio`**：在 `LocalFeatureObjectDetectorOnnx` 内，先剔除「仿射框面积占全图比例过大」的参考视图，再在剩余结果中按内点数优先、**框面积次优**选参考。
+- **在线中心 ROI 回退**：若最终框面积占比仍大于该阈值，则用 `fallback_center_scale` 定义的中心窗口重新裁剪，避免整图送入 GATsSPG。
+- 将 `bbox_max_area_ratio` 设为 **`null`** 可关闭上述过滤与回退（接近旧行为）。
+
+---
+
+## 12.任务目标
 
 使用视频流模拟相机输入：
-视频路径：/home/data/qrb_ros_simulation_ws/OnePose-main/data/demo/test_coffee/test_coffee-test/Frames.m4v
-模型文件：/home/data/qrb_ros_simulation_ws/OnePose-main/data/models/onnx
+视频路径：/raid/tengf/6d-pose-resource/OnePose/data/demo/test_coffee/test_coffee-test/Frames.m4v
+模型文件：/raid/tengf/6d-pose-resource/OnePose/test_onnx/onnx_demo/models
 
 a. 根据你的设计文档，实现上述视频流在线推理的Pipeline，保存为pipeline_online.py
 
@@ -258,4 +308,83 @@ b. 先使用保存临时文件的方法打通pipeline
 
 c. 调试并运行pipeline_online.py，根据你的测试用例给出测试报告
 
-你可以使用source ~/miniconda3/bin/activate && conda activate onepose激活虚拟环境
+d. input data path和model path以及其他模型需要的参数改为yml配置文件传入
+
+你可以使用 source /home/tengf/qrb_ros_simulation_ws/miniconda/bin/activate && conda activate onepose激活虚拟环境
+
+### 12.1 实现说明（已完成）
+
+| 项 | 说明 |
+|----|------|
+| 代码位置 | `test_onnx/onnx_demo/pipeline_online.py` |
+| 配置文件 | `test_onnx/onnx_demo/pipeline_online.yml`（可复制后按环境修改） |
+| 设计对应 | `CameraPipelineConfig`、`FrameInput`、`PoseEstimationResult`、`CameraPosePipeline`（`process_frame` / `reset`）、`VideoFileSource`、`run_camera_loop`；`load_online_yaml()` 从 YAML 构建配置 |
+| 临时文件打通 | 每帧将灰度写入 `/tmp/onepose_online_query_gray.png`（可在 YAML `pipeline.tmp_gray_path` 修改）；可视化时另写 BGR 到 `tmp_bgr_path` 供 `save_demo_image` 使用 |
+| 路径约定 | **相对路径均相对于 YAML 文件所在目录解析**；也可用绝对路径（见任务 11 中仓库内默认布局） |
+
+**YAML 结构概要**：
+
+| 键块 | 内容 |
+|------|------|
+| `input.video` | 测试视频路径 |
+| `models` | `onnx_dir` + 默认文件名 `superpoint.onnx` / `superglue.onnx` / `gatsspg.onnx`，或分别指定 `superpoint_onnx` 等覆盖 |
+| `data` | `data_root`、`seq_dir`、`sfm_model_dir`；可选 `intrinsics_file`（默认 `{seq_dir}/intrinsics.txt`） |
+| `runtime` | `max_frames`、`vis_dir`（非 null 时在 `vis_dir/detect|match|pose/` 写序列图）、`frame_stride`、`ref_width` / `ref_height`（内参缩放，见 §12.3） |
+| `pipeline` | `num_leaf`、`max_num_kp3d`、`crop_size`、内点阈值、临时图路径等 |
+| `detector` | `n_ref_view`；`bbox_max_area_ratio`（仿射框面积占比上限，过滤错误参考视图 + 触发在线中心 ROI 回退；`null` 关闭）；`fallback_center_scale`（回退窗口相对 `min(W,H)` 比例） |
+| `superpoint` | `nms_radius`、`keypoint_threshold`、`max_keypoints`、`remove_borders`（传入检测器与裁剪图特征提取） |
+
+**运行示例**（在 `onnx_demo` 目录下，先编辑 `pipeline_online.yml` 中路径，数据与 ONNX 就绪后）：
+
+```bash
+source /home/tengf/qrb_ros_simulation_ws/miniconda/bin/activate && conda activate onepose
+cd test_onnx/onnx_demo
+python pipeline_online.py
+python pipeline_online.py --config /path/to/custom.yml
+```
+
+默认读取同目录下 `pipeline_online.yml`。任务 11 给出的仓库内参考路径为：
+
+- 视频：`data/demo/test_coffee/test_coffee-test/Frames.m4v`（相对仓库根）
+- ONNX：`test_onnx/onnx_demo/models/`（默认 yml 中通过 `../../data/...` 与 `./models` 相对 **YAML 文件** 解析）
+
+### 12.2 测试报告（对照第 8 节）
+
+在本仓库当前 CI/开发机（`/raid/tengf/...`）上执行了**可重复**的检查；**完整 IT 需用户机器上存在任务 11 所列数据与 ONNX**。
+
+| 用例 ID | 名称 | 本环境结果 | 说明 |
+|---------|------|------------|------|
+| — | `py_compile` + `--help` | **通过** | `python3 -m py_compile pipeline_online.py`；CLI 仅 `--config` / `-c`，路径与参数来自 YAML |
+| UT-04（逻辑） | `reset` 后首帧走全图 detect | **代码满足** | `reset()` 清零 `_frame_count` 与上一帧位姿/内点；下一帧 `process_frame` 与首帧同分支 |
+| IT-01 | 与 `run_sequence` 首帧数值一致 | **未在本机执行** | 需同一 `0.png` 构造 `FrameInput` 与视频首帧对比位姿；可用 `--compare` 扩展或独立脚本 |
+| IT-02 | 短视频 `run_camera_loop` | **未在本机执行** | 本机缺少 `Frames.m4v` 与 ONNX 目录，入口在校验文件时退出（exit code 1） |
+| IT-03 | `frame_stride` | **代码满足** | `--frame_stride N` 每 N 帧处理一次 |
+| PF-01 | 分阶段耗时 | **需在目标机跑通后**看打印 | `main()` 汇总 `detect` / `extract` / `match3d` / `pnp` 均值（ms/帧） |
+| EX-01 | 视频结束 | **通过（设计）** | `read()` 失败即结束循环，不抛未捕获异常 |
+| EX-03 | `K` 与分辨率 | **可选缩放** | 在 YAML `runtime.ref_width` / `ref_height` 填写标定分辨率；未填则假定与视频一致 |
+
+**在本机可复现检查**：`load_online_yaml("pipeline_online.yml")` 将相对路径解析为绝对路径；若缺少 ONNX/视频文件，`main()` 会在校验阶段报错退出。
+
+### 12.3 关键问题记录
+
+1. **路径与环境的可移植性**  
+   数据与 ONNX 位置已收敛到仓库内布局（见任务 11 视频与 `test_onnx/onnx_demo/models`）；跨机器时只需改 `pipeline_online.yml` 或使用绝对路径。Conda 环境仍推荐 `onepose`。
+
+2. **检测器仍依赖磁盘路径**  
+   `LocalFeatureObjectDetectorOnnx.crop_img_by_bbox` 内部 `cv2.imread(query_img_path)`，在线路径必须先写临时 PNG；与 `pose_estimation_node.py` 的 workaround 一致。后续可按设计文档第 5 节实现 `_detect_and_crop_in_memory` 以去掉高频写盘。
+
+3. **内参与视频分辨率（EX-03）**  
+   `intrinsics.txt` 对应的是标定时的图像尺寸；若 `Frames.m4v` 分辨率与 `color_full` 不一致，必须缩放 `fx, fy, cx, cy`。实现中提供 `_scale_K_to_resolution` 与 CLI `--ref_width` / `--ref_height`；未传时假定已对齐。
+
+4. **可视化与灰度图**  
+   `save_demo_image` 使用 `cv2.imread` 读彩色图再画框轴；纯灰度临时文件会导致通道数不符合预期。处理：可视化前将灰度转为 BGR 写入 `tmp_bgr_path`。
+
+5. **帧率降采样下标**  
+   `run_camera_loop` 使用 `video_frame_idx % frame_stride` 跳过帧，避免早期实现里计数器重复递增导致的 stride 错误。
+
+6. **跨物体配置导致检测框异常**  
+   视频属物体 B、SfM 属物体 A 时，特征匹配仍可能产生「高内点数 + 巨大仿射框」。务必使 `pipeline_online.yml` 中 `data_root` / `seq_dir` / `sfm_model_dir` 与视频同属一物；并启用 `detector.bbox_max_area_ratio` 与中心回退作第二道防线（见 §11 表后说明）。
+
+---
+
+*文档版本：与仓库审阅时 `run_single.py`、`pipeline_single.py` 行为一致；实现时以实际代码为准。*
