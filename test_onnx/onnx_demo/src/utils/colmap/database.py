@@ -122,18 +122,18 @@ def pair_id_to_image_ids(pair_id):
     return image_id1, image_id2
 
 
+
+
 def array_to_blob(array):
     if IS_PYTHON3:
-        return array.tostring()
+        return array.tobytes()
     else:
         return np.getbuffer(array)
 
 
 def blob_to_array(blob, dtype, shape=(-1,)):
-    if IS_PYTHON3:
-        return np.fromstring(blob, dtype=dtype).reshape(*shape)
-    else:
-        return np.frombuffer(blob, dtype=dtype).reshape(*shape)
+    """Deserialize SQLite BLOB bytes to ndarray (binary blobs: use frombuffer, NumPy 2 friendly)."""
+    return np.frombuffer(blob, dtype=dtype).reshape(*shape)
 
 
 class COLMAPDatabase(sqlite3.Connection):

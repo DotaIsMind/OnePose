@@ -22,6 +22,7 @@
 from __future__ import annotations
 
 import argparse
+import logging
 import os.path as osp
 import sys
 import time
@@ -48,6 +49,15 @@ from pipeline_single import (  # noqa: E402
 
 _TMP_GRAY = "/tmp/onepose_online_query_gray.png"
 _TMP_BGR = "/tmp/onepose_online_query_vis.png"
+
+_logger = logging.getLogger(__name__)
+
+
+def _pose_mat_summary(pose_3x4: np.ndarray) -> str:
+    """Short English summary of a 3x4 pose matrix for logs (translation + rotation trace)."""
+    R = pose_3x4[:, :3].astype(np.float64)
+    t = pose_3x4[:, 3].astype(np.float64)
+    return f"t=({t[0]:.4f},{t[1]:.4f},{t[2]:.4f}) trace(R)={np.trace(R):.4f}"
 
 
 def _scale_K_to_resolution(
@@ -264,6 +274,8 @@ class OnlineFrameVis:
 
 @dataclass
 class FrameInput:
+    """One grayscale frame with intrinsics; optional ``frame_id`` for logging (video index)."""
+
     gray: np.ndarray
     K: np.ndarray
     timestamp: Optional[float] = None
@@ -272,6 +284,8 @@ class FrameInput:
 
 @dataclass
 class PoseEstimationResult:
+    """Per-frame pose output: PnP pose, inlier count, crop intrinsics, bbox, timings, quality flag."""
+
     pose_mat: np.ndarray
     pose_homo: np.ndarray
     inliers: np.ndarray
@@ -283,7 +297,11 @@ class PoseEstimationResult:
 
 
 class CameraPosePipeline:
-    """单帧 API，行为与 ``OnnxOnePosePipeline.run_sequence`` 循环一致（临时文件检测）。"""
+    """
+    Single-frame API mirroring ``OnnxOnePosePipeline.run_sequence`` (detection via temp image paths).
+
+    Logs (via ``logging``): frame index, detection branch and bbox, 2D–3D match counts, PnP / pose summary.
+    """
 
     def __init__(self, config: CameraPipelineConfig) -> None:
         from src.utils.data_utils import get_K
@@ -379,6 +397,11 @@ class CameraPosePipeline:
         *,
         save_vis: Optional[OnlineFrameVis] = None,
     ) -> PoseEstimationResult:
+        """
+        Run detect → SuperPoint crop → GAT 2D–3D match → RANSAC PnP for one frame.
+
+        Emits INFO logs: ``[frame]``, ``[detect]``, ``[match]``, ``[pose]`` (pose = PnP / 6-DoF estimate).
+        """
         from src.utils.eval_utils import ransac_PnP
         from src.utils.vis_utils import save_demo_image
 
@@ -400,9 +423,14 @@ class CameraPosePipeline:
         inp = (gray[np.newaxis, np.newaxis] / 255.0).astype(np.float32)
         timing_ms: Dict[str, float] = {}
 
+        frame_label = frame.frame_id if frame.frame_id is not None else self._frame_count
+        _logger.info("[frame] index=%s pipeline_internal_count=%s", frame_label, self._frame_count)
+
         t0 = time.perf_counter()
-        if self._frame_count == 0 or len(self._prev_inliers) < self._min_prev:
+        used_full_detect = self._frame_count == 0 or len(self._prev_inliers) < self._min_prev
+        if used_full_detect:
             bbox, inp_crop, K_crop = self.detector.detect(inp, tmp_gray, K, crop_size=self.crop_size)
+            detect_branch = "full_match"
         else:
             bbox, inp_crop, K_crop = self.detector.previous_pose_detect(
                 tmp_gray,
@@ -411,20 +439,32 @@ class CameraPosePipeline:
                 self.bbox3d,
                 crop_size=self.crop_size,
             )
+            detect_branch = "previous_pose_reproj"
         timing_ms["detect"] = (time.perf_counter() - t0) * 1000.0
 
         Hg, Wg = gray.shape[0], gray.shape[1]
         bbox = _clamp_bbox_xyxy(bbox, Wg, Hg)
         thr_area = self.config.detector_bbox_max_area_ratio
+        bbox_fallback = False
         if thr_area is not None and thr_area > 0 and _bbox_area_ratio_xyxy(bbox, Wg, Hg) > thr_area:
             fb = _center_fallback_bbox(Wg, Hg, self.config.detector_fallback_center_scale)
             bbox, inp_crop, K_crop = _crop_resize_from_gray(gray, fb, K, self.crop_size)
+            bbox_fallback = True
             if self._bbox_fallback_log_left > 0:
                 print(
                     f"[pipeline_online] 检测框面积占比 > {thr_area}，改用中心 ROI 裁剪 "
                     f"(scale={self.config.detector_fallback_center_scale})"
                 )
                 self._bbox_fallback_log_left -= 1
+
+        _logger.info(
+            "[detect] success=True branch=%s bbox_xyxy=%s area_ratio=%.4f fallback_center=%s time_ms=%.2f",
+            detect_branch,
+            np.array2string(bbox, precision=1, separator=","),
+            float(_bbox_area_ratio_xyxy(bbox, Wg, Hg)),
+            bbox_fallback,
+            timing_ms["detect"],
+        )
 
         if save_vis is not None and save_vis.detect_path is not None:
             _save_detect_visualization(gray, bbox, save_vis.detect_path)
@@ -435,6 +475,7 @@ class CameraPosePipeline:
 
         kpts2d = pred_det["keypoints"]
         desc2d = pred_det["descriptors"]
+        n_kpts_crop = int(kpts2d.shape[0])
 
         t2 = time.perf_counter()
         inp_data = {
@@ -450,6 +491,18 @@ class CameraPosePipeline:
         matches = pred["matches0"].numpy().flatten().astype(np.int32)
         mscores = pred["matching_scores0"].numpy().flatten()
         valid = matches > -1
+        n_match = int(np.sum(valid))
+        match_ok = n_match > 0
+        mscore_mean = float(np.mean(mscores[valid])) if match_ok else float("nan")
+        _logger.info(
+            "[match] success=%s num_2d3d=%s mean_mscore=%.4f time_ms=%.2f (crop_keypoints=%s)",
+            match_ok,
+            n_match,
+            mscore_mean,
+            timing_ms["match3d"],
+            n_kpts_crop,
+        )
+
         mkpts2d = kpts2d[valid]
         mkpts3d = self.keypoints3d[matches[valid]]
 
@@ -463,6 +516,16 @@ class CameraPosePipeline:
 
         n_inl = len(inliers) if inliers is not None else 0
         ok = n_inl >= self._min_ok
+        pose_finite = bool(np.isfinite(pose_pred).all() and np.isfinite(pose_pred_homo).all())
+        _logger.info(
+            "[pose] estimation ok=%s num_inliers=%s min_ok=%s pose_finite=%s %s time_pnp_ms=%.2f",
+            ok,
+            n_inl,
+            self._min_ok,
+            pose_finite,
+            _pose_mat_summary(pose_pred),
+            timing_ms["pnp"],
+        )
 
         crop_gray = (inp_crop[0, 0] * 255.0).clip(0, 255).astype(np.uint8)
         if save_vis is not None and save_vis.match_path is not None:
@@ -479,10 +542,7 @@ class CameraPosePipeline:
             )
 
         if save_vis is not None and save_vis.pose_path is not None:
-            pose_finite = bool(
-                np.isfinite(pose_pred).all() and np.isfinite(pose_pred_homo).all()
-            )
-            # 退化/失败位姿会导致 reproj NaN，draw_pose_axes / draw_3d_box 崩溃，需先判断有限性
+            # Degenerate poses yield NaN in reprojection; guard draw_pose_axes / draw_3d_box.
             save_demo_image(
                 pose_pred,
                 K,
@@ -541,10 +601,9 @@ def run_camera_loop(
     vis_dir: Optional[str] = None,
     frame_stride: int = 1,
 ) -> List[PoseEstimationResult]:
-    """连续 ``read`` 直至 EOF 或 ``max_frames``。
+    """Read frames until EOF or ``max_frames``; pass monotonic ``frame_id`` into ``process_frame`` for logs.
 
-    ``vis_dir`` 非空时，在其下创建 ``detect/``、``match/``、``pose/`` 子目录，
-    分别保存检测框、2D–3D 匹配与位姿（3D 框+坐标轴）可视化序列 ``%06d.jpg``。
+    If ``vis_dir`` is set, writes ``detect/``, ``match/``, ``pose/`` sequences as ``%06d.jpg``.
     """
     results: List[PoseEstimationResult] = []
     video_frame_idx = 0
@@ -572,7 +631,10 @@ def run_camera_loop(
                 pose_path=str(vis_root / "pose" / f"{idx:06d}.jpg"),
             )
 
-        r = pipeline.process_frame(FrameInput(gray=gray, K=K), save_vis=save_vis)
+        r = pipeline.process_frame(
+            FrameInput(gray=gray, K=K, frame_id=len(results)),
+            save_vis=save_vis,
+        )
         results.append(r)
 
         if max_frames is not None and len(results) >= max_frames:
@@ -712,6 +774,10 @@ def _parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(message)s",
+    )
     args = _parse_args()
     try:
         cfg, run_cfg = load_online_yaml(args.config)
