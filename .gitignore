@@ -1,6 +1,9 @@
 data/
 runs/
 !data/models
+models/
+
+.cursor
 .vscode
 .hydra
 *.log
