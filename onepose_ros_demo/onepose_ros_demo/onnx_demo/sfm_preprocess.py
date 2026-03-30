@@ -24,6 +24,11 @@
         --detection-model ./models/onnx/superpoint.onnx \ 
         --matching-model ./models/onnx/superglue.onnx \
         --backend onnx
+    # todo: 把数据集放到/tmp/data目录下，这样可以避免SFM model需要重建
+    onepose_ros_demo/onnx_demo/sfm_preprocess.py" \ 
+        --data-dir "/home/ubuntu/tengf/vision-grab/OnePose/onepose_ros_demo/data/demo/test_coffee test_coffee-annotate" \
+        --outputs-dir "/home/ubuntu/tengf/vision-grab/OnePose/onepose_ros_demo/data/demo/test_coffee/sfm_model" \
+        --backend onnx
 """
 
 from __future__ import annotations
@@ -571,8 +576,8 @@ def main():
     )
     args = p.parse_args()
     wd = args.work_dir.resolve()
-    det = args.detection_model or str(wd / "data/models/extractors/SuperPoint/superpoint_v1.pth")
-    mat = args.matching_model or str(wd / "data/models/matchers/SuperGlue/superglue_outdoor.pth")
+    det = args.detection_model or str(wd / "models/onnx/superpoint.onnx")
+    mat = args.matching_model or str(wd / "models/onnx/superglue.onnx")
 
     cfg = _build_cfg(
         work_dir=wd,

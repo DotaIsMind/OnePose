@@ -19,16 +19,53 @@ def names_to_pair(name0, name1):
     return '_'.join((name0.replace('/', '-'), name1.replace('/', '-')))
 
 
+def _colmap_headless_env():
+    """Return env vars that force COLMAP CLI into headless mode."""
+    env = os.environ.copy()
+    env['QT_QPA_PLATFORM'] = 'offscreen'
+    env['DISPLAY'] = ''
+    env['WAYLAND_DISPLAY'] = ''
+    # Avoid inheriting OpenCV Qt plugin path from Python env.
+    env.pop('QT_PLUGIN_PATH', None)
+    env.pop('QT_QPA_PLATFORM_PLUGIN_PATH', None)
+    return env
+
+
 def geometric_verification(colmap_path, database_path, pairs_path):
     """ Geometric verfication """
     logging.info('Performing geometric verification of the matches...')
+    # Prefer in-process pycolmap when available; fallback to COLMAP CLI.
+    try:
+        import pycolmap  # type: ignore
+    except Exception:
+        pycolmap = None
+
+    if pycolmap is not None and hasattr(pycolmap, "verify_matches"):
+        try:
+            # Newer pycolmap signatures are keyword-based.
+            pycolmap.verify_matches(
+                database_path=str(database_path),
+                pairs_path=str(pairs_path),
+            )
+            return
+        except TypeError:
+            # Backward compatibility for positional-only signatures.
+            try:
+                pycolmap.verify_matches(str(database_path), str(pairs_path))
+                return
+            except Exception as e:
+                logging.warning('pycolmap verify_matches failed, fallback to CLI: %s', e)
+        except Exception as e:
+            logging.warning('pycolmap verify_matches failed, fallback to CLI: %s', e)
+
     cmd = [
         str(colmap_path), 'matches_importer',
         '--database_path', str(database_path),
         '--match_list_path', str(pairs_path),
-        '--match_type', 'pairs'
+        '--match_type', 'pairs',
+        '--SiftMatching.use_gpu', '0',
     ]
-    ret = subprocess.call(cmd)
+    ret = subprocess.call(cmd, env=_colmap_headless_env())
     if ret != 0:
         logging.warning('Problem with matches_importer, existing.')
         exit(ret)
@@ -121,25 +158,62 @@ def import_matches(image_ids, database_path, pairs_path, matches_path, feature_p
 def run_triangulation(colmap_path, model_path, database_path, image_dir, empty_model):
     """ run triangulation on given database """
     logging.info('Running the triangulation...')
-    
-    cmd = [
-        str(colmap_path), 'point_triangulator',
-        '--database_path', str(database_path),
-        '--image_path', str(image_dir),
-        '--input_path', str(empty_model),
-        '--output_path', str(model_path),
-        '--Mapper.ba_refine_focal_length', '0',
-        '--Mapper.ba_refine_principal_point', '0',
-        '--Mapper.ba_refine_extra_params', '0'
-    ]
-    logging.info(' '.join(cmd))
-    ret = subprocess.call(cmd)
-    if ret != 0:
-        logging.warning('Problem with point_triangulator, existing.')
-        exit(ret)
+    # Prefer in-process pycolmap triangulation when available; fallback to CLI.
+    pycolmap_ok = False
+    try:
+        import pycolmap  # type: ignore
+    except Exception:
+        pycolmap = None
+
+    if pycolmap is not None and hasattr(pycolmap, "triangulate_points"):
+        try:
+            pycolmap.triangulate_points(
+                database_path=str(database_path),
+                image_path=str(image_dir),
+                input_path=str(empty_model),
+                output_path=str(model_path),
+                options={
+                    "Mapper.ba_refine_focal_length": False,
+                    "Mapper.ba_refine_principal_point": False,
+                    "Mapper.ba_refine_extra_params": False,
+                },
+            )
+            pycolmap_ok = True
+        except TypeError:
+            # Backward compatibility for positional-only signatures.
+            try:
+                pycolmap.triangulate_points(
+                    str(database_path),
+                    str(image_dir),
+                    str(empty_model),
+                    str(model_path),
+                )
+                pycolmap_ok = True
+            except Exception as e:
+                logging.warning('pycolmap triangulate_points failed, fallback to CLI: %s', e)
+        except Exception as e:
+            logging.warning('pycolmap triangulate_points failed, fallback to CLI: %s', e)
+
+    if not pycolmap_ok:
+        cmd = [
+            str(colmap_path), 'point_triangulator',
+            '--database_path', str(database_path),
+            '--image_path', str(image_dir),
+            '--input_path', str(empty_model),
+            '--output_path', str(model_path),
+            '--Mapper.ba_refine_focal_length', '0',
+            '--Mapper.ba_refine_principal_point', '0',
+            '--Mapper.ba_refine_extra_params', '0'
+        ]
+        logging.info(' '.join(cmd))
+        ret = subprocess.call(cmd, env=_colmap_headless_env())
+        if ret != 0:
+            logging.warning('Problem with point_triangulator, existing.')
+            exit(ret)
     
     stats_raw = subprocess.check_output(
-        [str(colmap_path), 'model_analyzer', '--path', model_path]
+        [str(colmap_path), 'model_analyzer', '--path', model_path],
+        env=_colmap_headless_env(),
     )
     stats_raw = stats_raw.decode().split('\n')
     stats = dict()
@@ -186,4 +260,12 @@ def main(sfm_dir, empty_sfm_model, outputs_dir, pairs, features, matches, \
     if not image_dir:
         image_dir = '/'
     stats = run_triangulation(colmap_path, model, database, image_dir, empty_sfm_model)
-    os.system(f'colmap model_converter --input_path {model} --output_path {outputs_dir}/model.ply --output_type PLY')
+    subprocess.call(
+        [
+            str(colmap_path), 'model_converter',
+            '--input_path', str(model),
+            '--output_path', str(Path(outputs_dir) / 'model.ply'),
+            '--output_type', 'PLY',
+        ],
+        env=_colmap_headless_env(),
+    )

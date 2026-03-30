@@ -33,10 +33,14 @@ _ONNX_DIR = _ONNX_LIB_ROOT / "models" / "onnx"
 _PKG_DATA = _SHARE / "data"
 _SRC_DATA = Path(__file__).resolve().parent.parent / "data"
 _DATA_BASE = _PKG_DATA if _PKG_DATA.is_dir() else _SRC_DATA
-_MARK = _DATA_BASE / "demo" / "mark_cup"
-_DATA_ROOT = str(_MARK)
-_SEQ_DIR = str(_MARK / "mark_cup-annotate")
-_SFM_DIR = str(_MARK / "sfm_model")
+# _MARK = _DATA_BASE / "demo" / "mark_cup"
+# _DATA_ROOT = str(_MARK)
+# _SEQ_DIR = str(_MARK / "mark_cup-annotate")
+# _SFM_DIR = str(_MARK / "sfm_model")
+_TMP_MARK = Path("/tmp/onepose_data/demo/test_coffee")
+_DATA_ROOT = str(_TMP_MARK)
+_SEQ_DIR = str(_TMP_MARK / "test_coffee-test")
+_SFM_DIR = str(_TMP_MARK / "sfm_model")
 # runtime.vis_dir: default under installed onnx_demo (writable if user chmods, else override)
 _VIS_DIR = (_ONNX_LIB_ROOT / "outputs").resolve()
 

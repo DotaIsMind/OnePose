@@ -42,6 +42,7 @@ import os
 import sys
 import glob
 import time
+import traceback
 import threading
 from pathlib import Path
 from typing import Optional, Tuple
@@ -674,6 +675,10 @@ class PoseEstimationNode(Node):
         except Exception as e:
             self.get_logger().error(
                 f"Inference failed on frame {self._engine._frame_id}: {e}",
+                throttle_duration_sec=2.0,
+            )
+            self.get_logger().error(
+                traceback.format_exc(),
                 throttle_duration_sec=2.0,
             )
             return

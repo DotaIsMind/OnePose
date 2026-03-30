@@ -113,6 +113,35 @@ source install/setup.bash
 
 ## 运行步骤（推荐顺序）
 
+### 一键脚本（SfM + Build + Launch）
+
+已提供一键可复现脚本：`scripts/run_onepose_local_demo.sh`，默认对象为 `test_coffee`，按顺序执行：
+
+1. `sfm_preprocess.py --backend onnx`
+2. `colcon build --packages-select onepose_ros_demo --symlink-install`
+3. `ros2 launch onepose_ros_demo local_file.launch.py`
+
+```bash
+cd /path/to/onepose_ros_demo
+bash scripts/run_onepose_local_demo.sh
+```
+
+常见可选参数：
+
+```bash
+# 指定对象名（对应 data/demo/<object>）
+bash scripts/run_onepose_local_demo.sh --object test_coffee
+
+# 跳过 SfM（已生成 sfm_model 时）
+bash scripts/run_onepose_local_demo.sh --skip-sfm
+
+# 跳过构建（仅重启 launch）
+bash scripts/run_onepose_local_demo.sh --skip-build
+
+# 透传 launch 参数（可重复）
+bash scripts/run_onepose_local_demo.sh --launch-arg publish_rate_hz:=5.0
+```
+
 ### 1. 准备标注数据集
 
 将已完成解析 / 标注的物体数据放到**本包根目录**（与 `CMakeLists.txt` 同级）下的 `data/demo/` 中，例如：
@@ -187,6 +216,18 @@ ros2 launch onepose_ros_demo local_file.launch.py
 ros2 launch onepose_ros_demo local_file.launch.py \
     publish_rate_hz:=5.0 \
     loop_sequence:=true
+```
+
+device 端推荐使用**绝对路径**覆盖数据参数（避免安装目录变化导致默认相对路径不一致）：
+
+```bash
+source /opt/ros/jazzy/setup.bash
+source /path/to/your_ws/install/setup.bash
+
+ros2 launch onepose_ros_demo local_file.launch.py \
+    data_root:=/tmp/onepose_data/demo/test_coffee \
+    seq_dir:=/tmp/onepose_data/demo/test_coffee/test_coffee-test \
+    sfm_model_dir:=/tmp/onepose_data/demo/test_coffee/sfm_model
 ```
 
 ### Mode 2 – Camera topic（实时相机）
