@@ -11,6 +11,10 @@ Usage:
     ros2 launch onepose_ros_demo camera_topic.launch.py \
         image_topic:=/my_camera/image_raw \
         camera_info_topic:=/my_camera/camera_info
+
+Default topics are aligned with Orbbec Gemini 335:
+    image_topic:=/camera/color/image_raw
+    camera_info_topic:=/camera/color/camera_info
 """
 
 from ament_index_python.packages import get_package_prefix, get_package_share_directory
@@ -50,12 +54,12 @@ def generate_launch_description():
         # ── launch arguments ──────────────────────────────────────────────────
         DeclareLaunchArgument(
             "image_topic",
-            default_value="/camera/image_raw",
+            default_value="/camera/color/image_raw",
             description="ROS2 image topic to subscribe to",
         ),
         DeclareLaunchArgument(
             "camera_info_topic",
-            default_value="/camera/camera_info",
+            default_value="/camera/color/camera_info",
             description="ROS2 CameraInfo topic for intrinsics",
         ),
         DeclareLaunchArgument(

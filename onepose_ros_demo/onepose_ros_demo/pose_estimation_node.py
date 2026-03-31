@@ -105,6 +105,16 @@ def get_K(intrin_file):
         [0, fy, cy, 0],
         [0,  0,  1, 0]
     ])
+    # K = np.array([
+    #     [408.9676818847656,   0.0,               422.6750183105469],
+    #     [  0.0,              408.9676818847656, 241.65625],
+    #     [  0.0,                0.0,               1.0]
+    # ], dtype=np.float64)
+    # K_homo = np.array([
+    #     [408.9676818847656,   0.0,               422.6750183105469, 0.0],
+    #     [  0.0,              408.9676818847656, 241.65625, 0.0],
+    #     [  0.0,                0.0,               1.0, 0.0]
+    # ], dtype=np.float64)
     return K, K_homo
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -161,6 +171,30 @@ _TMP_IMG_PATH = "/tmp/_onepose_ros_query.png"
 def _save_tmp_image(gray: np.ndarray) -> str:
     cv2.imwrite(_TMP_IMG_PATH, gray)
     return _TMP_IMG_PATH
+
+
+def _scale_intrinsics(
+    K: np.ndarray,
+    src_size: Tuple[int, int],
+    dst_size: Tuple[int, int],
+) -> np.ndarray:
+    """Scale camera intrinsics when image size changes."""
+    src_w, src_h = int(src_size[0]), int(src_size[1])
+    dst_w, dst_h = int(dst_size[0]), int(dst_size[1])
+    if src_w <= 0 or src_h <= 0 or dst_w <= 0 or dst_h <= 0:
+        return np.asarray(K, dtype=np.float64).copy()
+    if src_w == dst_w and src_h == dst_h:
+        return np.asarray(K, dtype=np.float64).copy()
+
+    sx = float(dst_w) / float(src_w)
+    sy = float(dst_h) / float(src_h)
+
+    K_scaled = np.asarray(K, dtype=np.float64).copy()
+    K_scaled[0, 0] *= sx  # fx
+    K_scaled[1, 1] *= sy  # fy
+    K_scaled[0, 2] *= sx  # cx
+    K_scaled[1, 2] *= sy  # cy
+    return K_scaled
 
 
 def _overlay_rt_on_image_top_left(
@@ -385,6 +419,8 @@ class PoseEstimationNode(Node):
     loop_sequence   : loop the local sequence forever
     image_topic     : image topic for camera_topic mode
     camera_info_topic : camera info topic
+    ref_image_width / ref_image_height : reference image size for base K
+    input_width / input_height : resize input image to this size (<=0 means disabled)
     num_leaf        : GATsSPG num_leaf
     save_vis        : if True, save visualization via save_demo_image and Rt overlay
     vis_save_dir    : directory for saved frames when save_vis is True
@@ -405,6 +441,10 @@ class PoseEstimationNode(Node):
         self.declare_parameter("loop_sequence", Parameter.Type.BOOL)
         self.declare_parameter("image_topic", Parameter.Type.STRING)
         self.declare_parameter("camera_info_topic", Parameter.Type.STRING)
+        self.declare_parameter("ref_image_width", 0)
+        self.declare_parameter("ref_image_height", 0)
+        self.declare_parameter("input_width", 0)
+        self.declare_parameter("input_height", 0)
         self.declare_parameter("num_leaf", Parameter.Type.INTEGER)
         self.declare_parameter("save_vis", Parameter.Type.BOOL)
         self.declare_parameter("vis_save_dir", Parameter.Type.STRING)
@@ -421,9 +461,20 @@ class PoseEstimationNode(Node):
         self._loop         = self.get_parameter("loop_sequence").value
         self._image_topic  = self.get_parameter("image_topic").value
         self._ci_topic     = self.get_parameter("camera_info_topic").value
+        self._ref_image_width = int(self.get_parameter("ref_image_width").value)
+        self._ref_image_height = int(self.get_parameter("ref_image_height").value)
+        self._input_width = int(self.get_parameter("input_width").value)
+        self._input_height = int(self.get_parameter("input_height").value)
+        self._output_frame_id = "camera_optical_frame"
         self._num_leaf     = self.get_parameter("num_leaf").value
         self._save_vis     = bool(self.get_parameter("save_vis").value)
         self._vis_save_dir = str(self.get_parameter("vis_save_dir").value)
+        self._target_size: Optional[Tuple[int, int]] = None
+        if self._input_width > 0 and self._input_height > 0:
+            self._target_size = (self._input_width, self._input_height)
+            self.get_logger().info(
+                f"Input resize enabled: {self._input_width}x{self._input_height}"
+            )
 
         self.get_logger().info(
             f"[PoseEstimationNode] input_mode = {self._input_mode}"
@@ -468,14 +519,23 @@ class PoseEstimationNode(Node):
         intrin_path = os.path.join(self._seq_dir, "intrinsics.txt")
         if Path(intrin_path).exists():
             self._K, _ = get_K(intrin_path)
+            self._K_ref_size: Optional[Tuple[int, int]] = None
+            if self._ref_image_width > 0 and self._ref_image_height > 0:
+                self._K_ref_size = (self._ref_image_width, self._ref_image_height)
             self.get_logger().info(
                 f"Loaded intrinsics from {intrin_path}"
             )
+            if self._K_ref_size is not None:
+                self.get_logger().info(
+                    f"Use reference intrinsics size: "
+                    f"{self._K_ref_size[0]}x{self._K_ref_size[1]}"
+                )
         else:
             self._K = None
+            self._K_ref_size = None
             self.get_logger().warn(
                 f"intrinsics.txt not found at {intrin_path}; "
-                "will wait for /camera/camera_info"
+                f"will wait for {self._ci_topic}"
             )
 
         # ── build inference engine ────────────────────────────────────────────
@@ -566,10 +626,19 @@ class PoseEstimationNode(Node):
             self._img_index += 1
             return
 
+        src_h, src_w = gray.shape[:2]
+        K_for_frame = np.asarray(self._K, dtype=np.float64).copy()
+        if self._K_ref_size is not None:
+            K_for_frame = _scale_intrinsics(K_for_frame, self._K_ref_size, (src_w, src_h))
+
+        if self._target_size is not None and (src_w, src_h) != self._target_size:
+            gray = cv2.resize(gray, self._target_size, interpolation=cv2.INTER_LINEAR)
+            K_for_frame = _scale_intrinsics(K_for_frame, (src_w, src_h), self._target_size)
+
         self._run_inference_and_publish(
             gray_img=gray,
             img_path=img_path,
-            K=self._K,
+            K=K_for_frame,
             source="local_file",
         )
         self._img_index += 1
@@ -586,6 +655,7 @@ class PoseEstimationNode(Node):
     def _setup_camera_topic_mode(self):
         """Subscribe to image and camera_info topics."""
         self._camera_K    = self._K   # may already be set from intrinsics.txt
+        self._camera_ref_size: Optional[Tuple[int, int]] = self._K_ref_size
         self._camera_lock = threading.Lock()
 
         best_effort_qos = QoSProfile(
@@ -618,17 +688,23 @@ class PoseEstimationNode(Node):
     def _camera_info_callback(self, msg: CameraInfo):
         """Extract K from CameraInfo message."""
         with self._camera_lock:
-            if self._camera_K is None:
-                K = np.array(msg.k, dtype=np.float64).reshape(3, 3)
-                self._camera_K = K
+            K = np.array(msg.k, dtype=np.float64).reshape(3, 3)
+            prev_K = self._camera_K
+            self._camera_K = K
+            if msg.width > 0 and msg.height > 0:
+                self._camera_ref_size = (int(msg.width), int(msg.height))
+            if msg.header.frame_id:
+                self._output_frame_id = msg.header.frame_id
+            if prev_K is None or not np.allclose(prev_K, K):
                 self.get_logger().info(
-                    f"Received camera intrinsics from {self._ci_topic}:\n{K}"
+                    f"Received/updated camera intrinsics from {self._ci_topic}:\n{K}"
                 )
 
     def _image_callback(self, msg: Image):
         """Process an incoming image frame."""
         with self._camera_lock:
             K = self._camera_K
+            K_ref_size = self._camera_ref_size
 
         if K is None:
             self.get_logger().warn(
@@ -643,12 +719,21 @@ class PoseEstimationNode(Node):
             self.get_logger().error(f"Image conversion failed: {e}")
             return
 
+        src_h, src_w = gray.shape[:2]
+        K_for_frame = np.asarray(K, dtype=np.float64).copy()
+        if K_ref_size is not None:
+            K_for_frame = _scale_intrinsics(K_for_frame, K_ref_size, (src_w, src_h))
+
+        if self._target_size is not None and (src_w, src_h) != self._target_size:
+            gray = cv2.resize(gray, self._target_size, interpolation=cv2.INTER_LINEAR)
+            K_for_frame = _scale_intrinsics(K_for_frame, (src_w, src_h), self._target_size)
+
         img_path = _save_tmp_image(gray)
 
         self._run_inference_and_publish(
             gray_img=gray,
             img_path=img_path,
-            K=K,
+            K=K_for_frame,
             source="camera_topic",
         )
 
@@ -691,7 +776,7 @@ class PoseEstimationNode(Node):
         # Header with current ROS time
         now = self.get_clock().now()
         msg.header.stamp    = now.to_msg()
-        msg.header.frame_id = "camera_optical_frame"
+        msg.header.frame_id = self._output_frame_id
 
         success = (
             pose_3x4 is not None
@@ -792,6 +877,14 @@ class PoseEstimationNode(Node):
 
         # ── log ───────────────────────────────────────────────────────────────
         status = "OK" if success else "FAILED"
+        if success:
+            r_mat_log = (
+                f"R=[[{R_mat[0,0]:.4f}, {R_mat[0,1]:.4f}, {R_mat[0,2]:.4f}], "
+                f"[{R_mat[1,0]:.4f}, {R_mat[1,1]:.4f}, {R_mat[1,2]:.4f}], "
+                f"[{R_mat[2,0]:.4f}, {R_mat[2,1]:.4f}, {R_mat[2,2]:.4f}]]"
+            )
+        else:
+            r_mat_log = "R=N/A"
         self.get_logger().info(
             f"[{source}] frame={frame_id:04d}  "
             f"inliers={num_inliers:3d}  "
@@ -799,7 +892,8 @@ class PoseEstimationNode(Node):
             f"t={elapsed_ms:.1f}ms  "
             f"t_vec=[{t_vec[0]:.4f}, "
             f"{t_vec[1]:.4f}, "
-            f"{t_vec[2]:.4f}]"
+            f"{t_vec[2]:.4f}]  "
+            f"{r_mat_log}"
         )
 
 
