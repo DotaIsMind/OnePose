@@ -26,27 +26,84 @@ from tqdm import tqdm
 from typing import Dict, Tuple
 
 # ── project root on path ──────────────────────────────────────────────────────
-PROJECT_ROOT = Path(__name__).parent
-sys.path.insert(0, str(PROJECT_ROOT))
+PKG_DIR = Path(__file__).resolve().parent
+TEST_ONNX_DIR = PKG_DIR.parent
+PROJECT_ROOT = TEST_ONNX_DIR.parent
+for _p in (str(PROJECT_ROOT), str(TEST_ONNX_DIR)):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
+SRC_DIR = PROJECT_ROOT / "src"
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
 
-ONNX_MODEL_DIR = Path("/home/data/qrb_ros_simulation_ws/OnePose-main/data/models")
+ONNX_MODEL_DIR = PROJECT_ROOT / "data/models/onnx"
 
 # ── demo data paths ───────────────────────────────────────────────────────────
 # DATA_ROOT    = str(PROJECT_ROOT / "data/demo/test_coffee")
 # SEQ_DIR      = str(PROJECT_ROOT / "data/demo/test_coffee/test_coffee-test")
 # SFM_DIR      = str(PROJECT_ROOT / "data/demo/test_coffee/sfm_model")
 
-DATA_ROOT = Path("/home/data/qrb_ros_simulation_ws/OnePose-main/data/demo/test_coffee")
-SEQ_DIR = str( DATA_ROOT / "test_coffee-test" )
-SFM_DIR = str( DATA_ROOT / "sfm_model")
+DATA_ROOT = PROJECT_ROOT / "data/demo/mark_cup"
+SEQ_DIR = str(DATA_ROOT / "mark_cup-annotate")
+SFM_DIR = str(DATA_ROOT / "sfm_model")
 
-SP_ONNX  = str(ONNX_MODEL_DIR / "superpoint.onnx")
-SG_ONNX  = str(ONNX_MODEL_DIR / "superglue.onnx")
+SP_ONNX = str(ONNX_MODEL_DIR / "superpoint.onnx")
+SG_ONNX = str(ONNX_MODEL_DIR / "superglue.onnx")
 GAT_ONNX = str(ONNX_MODEL_DIR / "gatsspg.onnx")
 
-# SP_PTH   = str(PROJECT_ROOT / "data/models/extractors/SuperPoint/superpoint_v1.pth")
-# SG_PTH   = str(PROJECT_ROOT / "data/models/matchers/SuperGlue/superglue_outdoor.pth")
-# GAT_CKPT = str(PROJECT_ROOT / "data/models/checkpoints/onepose/GATsSPG.ckpt")
+SP_PTH = str(PROJECT_ROOT / "data/models/extractors/SuperPoint/superpoint_v1.pth")
+SG_PTH = str(PROJECT_ROOT / "data/models/matchers/SuperGlue/superglue_outdoor.pth")
+GAT_CKPT = str(PROJECT_ROOT / "data/models/checkpoints/onepose/GATsSPG.ckpt")
+if not Path(GAT_CKPT).is_file():
+    alt_ckpt = PROJECT_ROOT / "data/models/GATsSPG.ckpt"
+    if alt_ckpt.is_file():
+        GAT_CKPT = str(alt_ckpt)
+
+
+def configure_benchmark_paths(
+    *,
+    data_root: str | None = None,
+    seq_dir: str | None = None,
+    sfm_dir: str | None = None,
+    onnx_model_dir: str | None = None,
+) -> None:
+    """Override dataset/model paths from CLI before running benchmark."""
+    global DATA_ROOT, SEQ_DIR, SFM_DIR
+    global ONNX_MODEL_DIR, SP_ONNX, SG_ONNX, GAT_ONNX
+
+    if data_root:
+        DATA_ROOT = Path(data_root)
+    if seq_dir:
+        SEQ_DIR = seq_dir
+    if sfm_dir:
+        SFM_DIR = sfm_dir
+    if onnx_model_dir:
+        ONNX_MODEL_DIR = Path(onnx_model_dir)
+        SP_ONNX = str(ONNX_MODEL_DIR / "superpoint.onnx")
+        SG_ONNX = str(ONNX_MODEL_DIR / "superglue.onnx")
+        GAT_ONNX = str(ONNX_MODEL_DIR / "gatsspg.onnx")
+
+
+def _check_required_files(paths: list[str], tag: str) -> None:
+    missing = [p for p in paths if not Path(p).is_file()]
+    if missing:
+        missing_msg = "\n".join(f"  - {p}" for p in missing)
+        raise FileNotFoundError(f"[{tag}] 缺少必需文件:\n{missing_msg}")
+
+
+def _get_ordered_frame_paths(seq_dir: str, max_frames: int | None = None) -> list[str]:
+    """
+    Return frame paths sorted by numeric frame id (0.png, 1.png, 2.png, ...).
+    This is shared by both PyTorch and ONNX branches to guarantee consistency.
+    """
+    img_lists = glob.glob(osp.join(seq_dir, "color_full", "*.png"))
+    img_lists = sorted(
+        img_lists,
+        key=lambda p: int(osp.splitext(osp.basename(p))[0]),
+    )
+    if max_frames is not None:
+        img_lists = img_lists[:max_frames]
+    return img_lists
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -55,13 +112,18 @@ GAT_ONNX = str(ONNX_MODEL_DIR / "gatsspg.onnx")
 
 def run_pytorch_inference(max_frames: int | None = None) -> Tuple[dict, dict]:
     """Run the original PyTorch pipeline and return (pred_poses, timing)."""
+    _check_required_files([SP_PTH, SG_PTH, GAT_CKPT], "PyTorch")
+
     import torch
     from torch.utils.data import DataLoader
-    from utils.data_utils import get_K, pad_features3d_random, build_features3d_leaves
-    from utils.path_utils import get_3d_box_path
-    from utils.eval_utils import ransac_PnP
-    from utils.vis_utils import save_demo_image, make_video
-    from utils.model_io import load_network
+    # Run benchmark on CPU-only environment by making .cuda() a no-op.
+    torch.Tensor.cuda = lambda self, *a, **k: self  # type: ignore[assignment]
+    torch.nn.Module.cuda = lambda self, *a, **k: self  # type: ignore[assignment]
+    from src.utils.data_utils import get_K, pad_features3d_random, build_features3d_leaves
+    from src.utils.path_utils import get_3d_box_path
+    from src.utils.eval_utils import ransac_PnP
+    from src.utils.vis_utils import save_demo_image, make_video
+    from src.utils.model_io import load_network
     from src.models.GATsSPG_lightning_model import LitModelGATsSPG
     from src.models.extractors.SuperPoint.superpoint import SuperPoint
     from src.models.matchers.SuperGlue.superglue import SuperGlue
@@ -85,7 +147,31 @@ def run_pytorch_inference(max_frames: int | None = None) -> Tuple[dict, dict]:
     matcher_2d.eval()
     load_network(matcher_2d, SG_PTH, force=True)
 
-    lit = LitModelGATsSPG.load_from_checkpoint(GAT_CKPT, map_location='cpu')
+    # PyTorch 2.6+ defaults torch.load(..., weights_only=True), which may fail for
+    # older Lightning checkpoints that contain OmegaConf objects.
+    try:
+        from omegaconf.listconfig import ListConfig
+        from torch.serialization import add_safe_globals
+
+        add_safe_globals([ListConfig])
+    except Exception:
+        # Keep compatibility when OmegaConf/serialization APIs change.
+        pass
+
+    try:
+        lit = LitModelGATsSPG.load_from_checkpoint(GAT_CKPT, map_location='cpu')
+    except Exception as e:
+        if "Weights only load failed" not in str(e):
+            raise
+        print(
+            "[warn] Lightning checkpoint 受 PyTorch weights_only 限制，"
+            "将回退为 weights_only=False（仅适用于受信任权重）。"
+        )
+        lit = LitModelGATsSPG.load_from_checkpoint(
+            GAT_CKPT,
+            map_location='cpu',
+            weights_only=False,
+        )
     lit.eval()
     matcher_3d = lit.matcher
 
@@ -95,13 +181,7 @@ def run_pytorch_inference(max_frames: int | None = None) -> Tuple[dict, dict]:
     vis_box_dir = osp.join(SEQ_DIR, "pred_vis_pytorch")
     os.makedirs(vis_box_dir, exist_ok=True)
 
-    img_lists = sorted(
-        glob.glob(osp.join(SEQ_DIR, "color_full", "*.png"))
-    )
-    im_ids = sorted([int(osp.basename(p).replace('.png', '')) for p in img_lists])
-    img_lists = [osp.join(osp.dirname(img_lists[0]), f'{i}.png') for i in im_ids]
-    if max_frames:
-        img_lists = img_lists[:max_frames]
+    img_lists = _get_ordered_frame_paths(SEQ_DIR, max_frames)
 
     K, _ = get_K(osp.join(SEQ_DIR, "intrinsics.txt"))
     box3d_path = osp.join(DATA_ROOT, "box3d_corners.txt")
@@ -207,6 +287,8 @@ def run_pytorch_inference(max_frames: int | None = None) -> Tuple[dict, dict]:
 
 def run_onnx_inference(max_frames: int | None = None) -> Tuple[dict, dict]:
     """Run the ONNX pipeline and return (pred_poses, timing)."""
+    _check_required_files([SP_ONNX, SG_ONNX, GAT_ONNX], "ONNX")
+
     from onnx_demo.pipeline import OnnxOnePosePipeline
 
     print("\n" + "=" * 60)
@@ -221,18 +303,17 @@ def run_onnx_inference(max_frames: int | None = None) -> Tuple[dict, dict]:
         max_num_kp3d=2500,
     )
 
-    # Temporarily limit frames if requested
+    # Use the exact same frame list as PyTorch branch.
     if max_frames is not None:
-        import glob as _glob, natsort as _ns
-        img_lists = _ns.natsorted(
-            _glob.glob(osp.join(SEQ_DIR, "color_full", "*.png"))
-        )[:max_frames]
+        selected_img_lists = _get_ordered_frame_paths(SEQ_DIR, max_frames)
         # Monkey-patch _get_paths to return limited list
         import onnx_demo.pipeline as _pl
         _orig = _pl._get_paths
+
         def _patched(data_root, data_dir, sfm_model_dir):
             lists, paths = _orig(data_root, data_dir, sfm_model_dir)
-            return lists[:max_frames], paths
+            return selected_img_lists, paths
+
         _pl._get_paths = _patched
         pred_poses, timing = pipeline.run_sequence(DATA_ROOT, SEQ_DIR, SFM_DIR)
         _pl._get_paths = _orig
@@ -447,7 +528,20 @@ def main(max_frames: int | None = None):
     report_dir.mkdir(parents=True, exist_ok=True)
 
     # 1. Run both pipelines
-    pt_poses,   pt_timing   = run_pytorch_inference(max_frames)
+    try:
+        pt_poses, pt_timing = run_pytorch_inference(max_frames)
+    except Exception as e:
+        print(f"[warn] 跳过 PyTorch benchmark: {e}")
+        print("[info] 将继续执行 ONNX 基准。")
+        _, onnx_timing = run_onnx_inference(max_frames)
+        print("\n── ONNX Timing Summary ──────────────────────────────────────")
+        for stage, times in onnx_timing.items():
+            print(f"  {stage:<12}: {np.mean(times)*1000:.1f} ms/frame")
+        print("─" * 50)
+        total = sum(np.mean(v) for v in onnx_timing.values())
+        print(f"  {'TOTAL':<12}: {total*1000:.1f} ms/frame  ({1.0/total:.2f} FPS)")
+        return
+
     onnx_poses, onnx_timing = run_onnx_inference(max_frames)
 
     # 2. Compare poses
@@ -476,5 +570,35 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="OnePose PyTorch vs ONNX benchmark")
     parser.add_argument('--max_frames', type=int, default=None,
                         help="Limit number of frames (default: all)")
+    parser.add_argument(
+        "--data_root",
+        type=str,
+        default=None,
+        help="Object root containing box3d_corners.txt",
+    )
+    parser.add_argument(
+        "--seq_dir",
+        type=str,
+        default=None,
+        help="Sequence directory containing color_full and intrinsics.txt",
+    )
+    parser.add_argument(
+        "--sfm_dir",
+        type=str,
+        default=None,
+        help="SFM model root containing outputs_superpoint_superglue",
+    )
+    parser.add_argument(
+        "--onnx_model_dir",
+        type=str,
+        default=None,
+        help="Directory containing superpoint.onnx/superglue.onnx/gatsspg.onnx",
+    )
     args = parser.parse_args()
+    configure_benchmark_paths(
+        data_root=args.data_root,
+        seq_dir=args.seq_dir,
+        sfm_dir=args.sfm_dir,
+        onnx_model_dir=args.onnx_model_dir,
+    )
     main(max_frames=args.max_frames)

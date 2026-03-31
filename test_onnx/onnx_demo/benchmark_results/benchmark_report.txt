@@ -1,0 +1,22 @@
+=================================================================
+  OnePose: PyTorch vs ONNX Runtime – Benchmark Report
+=================================================================
+
+── Timing Comparison (ms / frame) ──────────────────────────
+Stage               PyTorch         ONNX    Speedup
+----------------------------------------------------
+detect               465.0        354.5       1.31x
+extract              305.5        173.6       1.76x
+match3d               77.5        133.1       0.58x
+pnp                    1.2          1.3       0.98x
+----------------------------------------------------
+TOTAL                849.2        662.5       1.28x
+
+── Pose Error (PyTorch vs ONNX) ─────────────────────────────
+  Frames compared : 100
+  Rotation  error : mean=0.5488°  median=0.4664°  max=2.0361°
+  Translation err : mean=0.1096 cm  median=0.0987 cm  max=0.2934 cm
+
+── Interpretation ───────────────────────────────────────────
+  ✓ ONNX output is numerically equivalent to PyTorch.
+=================================================================

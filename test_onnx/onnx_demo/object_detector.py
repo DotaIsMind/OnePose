@@ -19,7 +19,22 @@ from onnx_demo.onnx_models import SuperPointOnnx, SuperGlueOnnx
 
 def _pack_extract_data(img_path: str) -> np.ndarray:
     """Load a grayscale image and return [1, H, W] float32 array."""
-    image = cv2.imread(img_path, cv2.IMREAD_GRAYSCALE)
+    path = Path(img_path)
+    if not path.is_file():
+        # COLMAP image names are often stored as relative paths (e.g. ../../data/demo/...).
+        # Re-resolve them when benchmark cwd is different.
+        repo_root = Path(__file__).resolve().parents[2]
+        alt_from_repo = (repo_root / img_path).resolve()
+        if alt_from_repo.is_file():
+            path = alt_from_repo
+        elif "data/demo/" in img_path:
+            rel = img_path.split("data/demo/", 1)[1]
+            alt_from_demo = (repo_root / "data/demo" / rel).resolve()
+            if alt_from_demo.is_file():
+                path = alt_from_demo
+    image = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE)
+    if image is None:
+        raise FileNotFoundError(f"Cannot read reference image: {img_path} (resolved: {path})")
     return (image[np.newaxis] / 255.0).astype(np.float32)
 
 
