@@ -877,14 +877,69 @@ class PoseEstimationNode(Node):
 
         # ── log ───────────────────────────────────────────────────────────────
         status = "OK" if success else "FAILED"
+
+        def _rpy_from_rotmat_zyx(R: np.ndarray) -> tuple[float, float, float]:
+            """Return roll/pitch/yaw (rad) from rotation matrix using ZYX convention."""
+            sy = float(np.sqrt(R[0, 0] * R[0, 0] + R[1, 0] * R[1, 0]))
+            singular = sy < 1e-6
+            if not singular:
+                roll = float(np.arctan2(R[2, 1], R[2, 2]))
+                pitch = float(np.arctan2(-R[2, 0], sy))
+                yaw = float(np.arctan2(R[1, 0], R[0, 0]))
+            else:
+                roll = float(np.arctan2(-R[1, 2], R[1, 1]))
+                pitch = float(np.arctan2(-R[2, 0], sy))
+                yaw = 0.0
+            return roll, pitch, yaw
+
         if success:
+            # Camera optical frame (OpenCV): x-right, y-down, z-forward
+            # End-effector frame requested by user: x-up, y-right, z-forward
+            # x_ee = -y_cam, y_ee = x_cam, z_ee = z_cam
+            R_ee_cam = np.array(
+                [[0.0, -1.0, 0.0],
+                 [1.0,  0.0, 0.0],
+                 [0.0,  0.0, 1.0]],
+                dtype=np.float64,
+            )
+            t_cam_obj = np.asarray(t_vec, dtype=np.float64)
+            R_ee_obj = R_ee_cam @ R_mat
+            t_ee_obj = R_ee_cam @ t_cam_obj
+
+            roll_cam, pitch_cam, yaw_cam = _rpy_from_rotmat_zyx(R_mat)
+            roll_ee, pitch_ee, yaw_ee = _rpy_from_rotmat_zyx(R_ee_obj)
+
             r_mat_log = (
-                f"R=[[{R_mat[0,0]:.4f}, {R_mat[0,1]:.4f}, {R_mat[0,2]:.4f}], "
+                f"R_cam_obj=[[{R_mat[0,0]:.4f}, {R_mat[0,1]:.4f}, {R_mat[0,2]:.4f}], "
                 f"[{R_mat[1,0]:.4f}, {R_mat[1,1]:.4f}, {R_mat[1,2]:.4f}], "
                 f"[{R_mat[2,0]:.4f}, {R_mat[2,1]:.4f}, {R_mat[2,2]:.4f}]]"
             )
+            t_conv_log = (
+                f"t_ee_obj=[{t_ee_obj[0]:.4f}, "
+                f"{t_ee_obj[1]:.4f}, "
+                f"{t_ee_obj[2]:.4f}]"
+            )
+            r_conv_log = (
+                f"R_ee_obj=[[{R_ee_obj[0,0]:.4f}, {R_ee_obj[0,1]:.4f}, {R_ee_obj[0,2]:.4f}], "
+                f"[{R_ee_obj[1,0]:.4f}, {R_ee_obj[1,1]:.4f}, {R_ee_obj[1,2]:.4f}], "
+                f"[{R_ee_obj[2,0]:.4f}, {R_ee_obj[2,1]:.4f}, {R_ee_obj[2,2]:.4f}]]"
+            )
+            euler_cam_log = (
+                f"euler_cam_deg=[{np.degrees(roll_cam):.2f}, "
+                f"{np.degrees(pitch_cam):.2f}, "
+                f"{np.degrees(yaw_cam):.2f}]"
+            )
+            euler_ee_log = (
+                f"euler_ee_deg=[{np.degrees(roll_ee):.2f}, "
+                f"{np.degrees(pitch_ee):.2f}, "
+                f"{np.degrees(yaw_ee):.2f}]"
+            )
         else:
             r_mat_log = "R=N/A"
+            t_conv_log = "t_ee_obj=N/A"
+            r_conv_log = "R_ee_obj=N/A"
+            euler_cam_log = "euler_cam_deg=N/A"
+            euler_ee_log = "euler_ee_deg=N/A"
         self.get_logger().info(
             f"[{source}] frame={frame_id:04d}  "
             f"inliers={num_inliers:3d}  "
@@ -893,7 +948,11 @@ class PoseEstimationNode(Node):
             f"t_vec=[{t_vec[0]:.4f}, "
             f"{t_vec[1]:.4f}, "
             f"{t_vec[2]:.4f}]  "
-            f"{r_mat_log}"
+            f"{r_mat_log}  "
+            f"{t_conv_log}  "
+            f"{r_conv_log}  "
+            f"{euler_cam_log}  "
+            f"{euler_ee_log}"
         )
 
 
