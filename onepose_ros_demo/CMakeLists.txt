@@ -66,4 +66,6 @@ install(
   DESTINATION lib/${PROJECT_NAME}/onnx_demo
 )
 
+ament_export_dependencies(rosidl_default_runtime)
+
 ament_package()

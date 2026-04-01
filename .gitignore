@@ -3,7 +3,9 @@ data/*
 !data/models/**
 runs/
 /models/
-
+pose_estimation_outputs_test_coke-local-file*/
+onepose_ros_demo/data/
+onepose_ros_demo/pose_estimation_outputs_test_coke
 .cursor
 .vscode
 .hydra

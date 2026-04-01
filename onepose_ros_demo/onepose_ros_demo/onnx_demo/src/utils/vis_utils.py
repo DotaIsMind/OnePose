@@ -232,8 +232,11 @@ def reproj(K, pose, pts_3d):
     pts_3d_homo = np.concatenate([pts_3d, np.ones((pts_3d.shape[0], 1))], axis=1)
     pts_3d_homo = pts_3d_homo.T
 
-    reproj_points = K_homo @ pose_homo @ pts_3d_homo
-    reproj_points = reproj_points[:] / reproj_points[2:]
+    reproj_points = (K_homo @ pose_homo @ pts_3d_homo).astype(np.float64, copy=False)
+    z = reproj_points[2:, :]
+    eps = 1e-8
+    safe_z = np.where(np.abs(z) < eps, np.where(z >= 0, eps, -eps), z)
+    reproj_points = reproj_points / safe_z
     reproj_points = reproj_points[:2, :].T
     return reproj_points # [n, 2]
 

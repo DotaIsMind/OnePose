@@ -8,6 +8,7 @@ ONNX Runtime for both SuperPoint (feature extraction) and SuperGlue
 
 from __future__ import annotations
 
+import os
 import cv2
 import numpy as np
 import os.path as osp
@@ -271,6 +272,8 @@ class LocalFeatureObjectDetectorOnnx:
 
     def _save_detection(self, crop_img: np.ndarray, query_img_path: str):
         if self.output_results and self.detect_save_dir:
+            if not os.path.exists(self.detect_save_dir):
+                os.makedirs(self.detect_save_dir, exist_ok=True)
             cv2.imwrite(
                 osp.join(self.detect_save_dir, osp.basename(query_img_path)),
                 crop_img,

@@ -73,7 +73,10 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 from std_msgs.msg import Header
 from sensor_msgs.msg import Image, CameraInfo
 from geometry_msgs.msg import PoseStamped, Point, Quaternion
-from onepose_ros_demo.msg import PoseEstimationResult
+try:
+    from onepose_ros_demo.msg import PoseEstimationResult
+except ImportError:
+    PoseEstimationResult = None
 
 # ── project imports ───────────────────────────────────────────────────────────
 from onnx_demo.onnx_models import SuperPointOnnx, GATsSPGOnnx
@@ -270,6 +273,7 @@ class OnePoseEngine:
         seq_dir: str | None = None,
         num_leaf: int = 8,
         max_num_kp3d: int = 2500,
+        detect_save_dir: str | None = None,
     ):
         # ── feature extractor ────────────────────────────────────────────────
         sp_cfg = {
@@ -287,8 +291,8 @@ class OnePoseEngine:
             superpoint_onnx_path=superpoint_onnx,
             superglue_onnx_path=superglue_onnx,
             sfm_ws_dir=sfm_ws_dir,
-            output_results=False,
-            detect_save_dir=None,
+            output_results=True,
+            detect_save_dir= str(detect_save_dir + "/detection_vis"),
             seq_dir=seq_dir,
         )
 
@@ -486,11 +490,18 @@ class PoseEstimationNode(Node):
             "/pose_estimation_result",
             10,
         )
-        self._pub_custom = self.create_publisher(
-            PoseEstimationResult,
-            "/pose_estimation_result_custom",
-            10,
-        )
+        self._pub_custom = None
+        if PoseEstimationResult is not None:
+            self._pub_custom = self.create_publisher(
+                PoseEstimationResult,
+                "/pose_estimation_result_custom",
+                10,
+            )
+        else:
+            self.get_logger().warn(
+                "onepose_ros_demo.msg.PoseEstimationResult not found; "
+                "skip publishing /pose_estimation_result_custom"
+            )
 
         # ── validate ONNX models ──────────────────────────────────────────────
         for label, path in [
@@ -551,6 +562,7 @@ class PoseEstimationNode(Node):
             box3d_path=box3d_path,
             seq_dir=self._seq_dir,
             num_leaf=self._num_leaf,
+            detect_save_dir=self._vis_save_dir,
         )
         self.get_logger().info("ONNX models loaded successfully.")
 
@@ -692,12 +704,13 @@ class PoseEstimationNode(Node):
             prev_K = self._camera_K
             self._camera_K = K
             if msg.width > 0 and msg.height > 0:
+                # self._camera_ref_size = height: 480 width: 848
                 self._camera_ref_size = (int(msg.width), int(msg.height))
             if msg.header.frame_id:
                 self._output_frame_id = msg.header.frame_id
             if prev_K is None or not np.allclose(prev_K, K):
                 self.get_logger().info(
-                    f"Received/updated camera intrinsics from {self._ci_topic}:\n{K}"
+                    f"Received/updated camera intrinsics from {self._ci_topic}: \n width: {msg.width} height: {msg.height} \n{K}"
                 )
 
     def _image_callback(self, msg: Image):
@@ -782,7 +795,7 @@ class PoseEstimationNode(Node):
             pose_3x4 is not None
             and pose_4x4 is not None
             and inliers is not None
-            and len(inliers) > 0
+            # and len(inliers) > 0
         )
         num_inliers = int(len(inliers)) if inliers is not None else -1
 
@@ -822,36 +835,37 @@ class PoseEstimationNode(Node):
 
         self._pub_pose_stamped.publish(msg)
 
-        # ── build custom PoseEstimationResult message ────────────────────────
-        custom_msg = PoseEstimationResult()
-        custom_msg.header = msg.header
-        custom_msg.frame_id = frame_id
-        
-        if success:
-            # Rotation matrix 3x3 (row-major)
-            R_flat = R_mat.flatten().tolist()
-            custom_msg.rotation_matrix = R_flat
-            
-            # Translation vector
-            custom_msg.translation_vector = t_vec
-            
-            # Pose matrix 4x4 (row-major)
-            if pose_4x4 is not None:
-                pose_4x4_flat = pose_4x4.flatten().tolist()
-                custom_msg.pose_matrix_4x4 = pose_4x4_flat
+        # ── build custom PoseEstimationResult message (if available) ─────────
+        if self._pub_custom is not None and PoseEstimationResult is not None:
+            custom_msg = PoseEstimationResult()
+            custom_msg.header = msg.header
+            custom_msg.frame_id = frame_id
+
+            if success:
+                # Rotation matrix 3x3 (row-major)
+                R_flat = R_mat.flatten().tolist()
+                custom_msg.rotation_matrix = R_flat
+
+                # Translation vector
+                custom_msg.translation_vector = t_vec
+
+                # Pose matrix 4x4 (row-major)
+                if pose_4x4 is not None:
+                    pose_4x4_flat = pose_4x4.flatten().tolist()
+                    custom_msg.pose_matrix_4x4 = pose_4x4_flat
+                else:
+                    # Create identity 4x4 matrix if pose_4x4 is None
+                    identity = np.eye(4, dtype=np.float64).flatten().tolist()
+                    custom_msg.pose_matrix_4x4 = identity
             else:
-                # Create identity 4x4 matrix if pose_4x4 is None
-                identity = np.eye(4, dtype=np.float64).flatten().tolist()
-                custom_msg.pose_matrix_4x4 = identity
-        else:
-            # Set default values when no pose
-            identity_3x3 = np.eye(3, dtype=np.float64).flatten().tolist()
-            custom_msg.rotation_matrix = identity_3x3
-            custom_msg.translation_vector = [0.0, 0.0, 0.0]
-            identity_4x4 = np.eye(4, dtype=np.float64).flatten().tolist()
-            custom_msg.pose_matrix_4x4 = identity_4x4
-        
-        self._pub_custom.publish(custom_msg)
+                # Set default values when no pose
+                identity_3x3 = np.eye(3, dtype=np.float64).flatten().tolist()
+                custom_msg.rotation_matrix = identity_3x3
+                custom_msg.translation_vector = [0.0, 0.0, 0.0]
+                identity_4x4 = np.eye(4, dtype=np.float64).flatten().tolist()
+                custom_msg.pose_matrix_4x4 = identity_4x4
+
+            self._pub_custom.publish(custom_msg)
 
         # ── optional visualization save ───────────────────────────────────────
         if self._save_vis and success and pose_4x4 is not None:

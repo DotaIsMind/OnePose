@@ -37,17 +37,17 @@ _ONNX_DIR = _ONNX_LIB_ROOT / "models" / "onnx"
 _PKG_DATA = _SHARE / "data"
 _SRC_DATA = Path(__file__).resolve().parent.parent / "data"
 _DATA_BASE = _PKG_DATA if _PKG_DATA.is_dir() else _SRC_DATA
-_OBJ_NAME = Path("mark_cup")
+_OBJ_NAME = Path("test_coke")
 # _MARK = _DATA_BASE / "demo" / _OBJ_NAME
 # _DATA_ROOT = str(_MARK)
 # _SEQ_DIR = str(_MARK / _OBJ_NAME / "-annotate")
 # _SFM_DIR = str(_MARK / "sfm_model")
-_TMP_MARK = Path("/tmp/onepose_data/demo") / _OBJ_NAME
+_TMP_MARK = Path("/home/ubuntu/onepose_data/demo") / _OBJ_NAME
 _DATA_ROOT = str(_TMP_MARK)
 _SEQ_DIR = str(_TMP_MARK / f"{_OBJ_NAME}-annotate")
 _SFM_DIR = str(_TMP_MARK / "sfm_model")
 # runtime.vis_dir: default under installed onnx_demo (writable if user chmods, else override)
-_VIS_DIR = str( "/tmp/pose_estimation_outputs_" + _OBJ_NAME.name)
+_VIS_DIR = str( "/home/ubuntu/tengf/vision-grab/OnePose/onepose_ros_demo/pose_estimation_outputs_" + _OBJ_NAME.name)
 
 
 def generate_launch_description():

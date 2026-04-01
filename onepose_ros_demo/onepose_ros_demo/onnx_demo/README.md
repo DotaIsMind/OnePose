@@ -10,7 +10,7 @@
 
 | 顺序 | 脚本 | 阶段 | 作用 |
 |------|------|------|------|
-| ① | [`parse_scanned_data.py`](parse_scanned_data.py) | 数据准备 | 解析 ARKit 等扫描目录，生成 `intrinsics.txt`、`box3d_corners.txt`、`color/`、`color_full/`、`poses/` 等 |
+| ① | [`parse_scanned_data.py`](parse_scanned_data.py) | 数据准备 | 解析 ARKit 等扫描目录，生成 `intrinsics.txt`、`box3d_corners.txt`、`color/`、`color_full/`、`poses/` 等 todo: test_<obj>数据改为test_<obj>-annotate的形式 |
 | ② | [`run_single.py`](run_single.py) | 离线 SfM（每物体一次） | COLMAP 三角化 + 后处理，产出 `sfm_model_dir/outputs_superpoint_superglue/{anno,sfm_ws/model}` |
 | ③ | [`pipeline_single.py`](pipeline_single.py) | 离线逐帧推理（验证） | 单文件整合 SP / SG / GAT 与检测器；`OnnxOnePosePipeline.run_sequence` 读 `color_full/*.png`，输出位姿与 `demo_video_onnx.mp4` |
 | ④ | [`pipeline_online.py`](pipeline_online.py) | 在线视频 / 相机流 | `CameraPosePipeline` + YAML：`FrameInput`（灰度 + K）→ 每帧 `PoseEstimationResult` |
