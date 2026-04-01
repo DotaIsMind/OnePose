@@ -108,148 +108,292 @@ def get_K(intrin_file):
         [0, fy, cy, 0],
         [0,  0,  1, 0]
     ])
-    # K = np.array([
-    #     [408.9676818847656,   0.0,               422.6750183105469],
-    #     [  0.0,              408.9676818847656, 241.65625],
-    #     [  0.0,                0.0,               1.0]
-    # ], dtype=np.float64)
-    # K_homo = np.array([
-    #     [408.9676818847656,   0.0,               422.6750183105469, 0.0],
-    #     [  0.0,              408.9676818847656, 241.65625, 0.0],
-    #     [  0.0,                0.0,               1.0, 0.0]
-    # ], dtype=np.float64)
     return K, K_homo
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Helper: convert ROS Image message → OpenCV grayscale numpy array
-# ─────────────────────────────────────────────────────────────────────────────
-
-def _ros_image_to_gray(msg: Image) -> np.ndarray:
-    """Convert a sensor_msgs/Image to a uint8 grayscale numpy array."""
-    enc = msg.encoding.lower()
-    data = np.frombuffer(msg.data, dtype=np.uint8)
-
-    if enc in ("mono8", "8uc1"):
-        img = data.reshape((msg.height, msg.width))
-    elif enc in ("bgr8", "rgb8", "8uc3"):
-        img = data.reshape((msg.height, msg.width, 3))
-        if enc == "rgb8":
-            img = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
-        else:
-            img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    elif enc in ("bgra8", "rgba8", "8uc4"):
-        img = data.reshape((msg.height, msg.width, 4))
-        if enc == "rgba8":
-            img = cv2.cvtColor(img, cv2.COLOR_RGBA2GRAY)
-        else:
-            img = cv2.cvtColor(img, cv2.COLOR_BGRA2GRAY)
-    elif enc in ("mono16", "16uc1"):
-        if msg.is_bigendian:
-            data = data.view(np.dtype('>u2'))
-        else:
-            data = data.view(np.uint16)
-        img16 = data.reshape((msg.height, msg.width))
-        img = (img16 >> 8).astype(np.uint8)
-    else:
-        # Fallback: try cv_bridge if available
-        try:
-            from cv_bridge import CvBridge
-            bridge = CvBridge()
-            img = bridge.imgmsg_to_cv2(msg, desired_encoding="mono8")
-        except Exception as e:
-            raise ValueError(
-                f"Unsupported image encoding '{msg.encoding}': {e}"
-            )
-    return img
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Helper: build a temporary image file from a numpy array
-# (the object detector needs a file path for some operations)
-# ─────────────────────────────────────────────────────────────────────────────
 
 _TMP_IMG_PATH = "/tmp/_onepose_ros_query.png"
 
 
-def _save_tmp_image(gray: np.ndarray) -> str:
-    cv2.imwrite(_TMP_IMG_PATH, gray)
-    return _TMP_IMG_PATH
+class NodeImageUtils:
+    """Image/intrinsics utilities that do not depend on class instance state."""
 
+    @staticmethod
+    def ros_image_to_gray(msg: Image) -> np.ndarray:
+        """Convert a sensor_msgs/Image to a uint8 grayscale numpy array."""
+        enc = msg.encoding.lower()
+        data = np.frombuffer(msg.data, dtype=np.uint8)
 
-def _scale_intrinsics(
-    K: np.ndarray,
-    src_size: Tuple[int, int],
-    dst_size: Tuple[int, int],
-) -> np.ndarray:
-    """Scale camera intrinsics when image size changes."""
-    src_w, src_h = int(src_size[0]), int(src_size[1])
-    dst_w, dst_h = int(dst_size[0]), int(dst_size[1])
-    if src_w <= 0 or src_h <= 0 or dst_w <= 0 or dst_h <= 0:
-        return np.asarray(K, dtype=np.float64).copy()
-    if src_w == dst_w and src_h == dst_h:
-        return np.asarray(K, dtype=np.float64).copy()
+        if enc in ("mono8", "8uc1"):
+            img = data.reshape((msg.height, msg.width))
+        elif enc in ("bgr8", "rgb8", "8uc3"):
+            img = data.reshape((msg.height, msg.width, 3))
+            if enc == "rgb8":
+                img = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
+            else:
+                img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        elif enc in ("bgra8", "rgba8", "8uc4"):
+            img = data.reshape((msg.height, msg.width, 4))
+            if enc == "rgba8":
+                img = cv2.cvtColor(img, cv2.COLOR_RGBA2GRAY)
+            else:
+                img = cv2.cvtColor(img, cv2.COLOR_BGRA2GRAY)
+        elif enc in ("mono16", "16uc1"):
+            if msg.is_bigendian:
+                data = data.view(np.dtype('>u2'))
+            else:
+                data = data.view(np.uint16)
+            img16 = data.reshape((msg.height, msg.width))
+            img = (img16 >> 8).astype(np.uint8)
+        else:
+            try:
+                from cv_bridge import CvBridge
+                bridge = CvBridge()
+                img = bridge.imgmsg_to_cv2(msg, desired_encoding="mono8")
+            except Exception as e:
+                raise ValueError(
+                    f"Unsupported image encoding '{msg.encoding}': {e}"
+                )
+        return img
 
-    sx = float(dst_w) / float(src_w)
-    sy = float(dst_h) / float(src_h)
+    @staticmethod
+    def save_tmp_image(gray: np.ndarray) -> str:
+        cv2.imwrite(_TMP_IMG_PATH, gray)
+        return _TMP_IMG_PATH
 
-    K_scaled = np.asarray(K, dtype=np.float64).copy()
-    K_scaled[0, 0] *= sx  # fx
-    K_scaled[1, 1] *= sy  # fy
-    K_scaled[0, 2] *= sx  # cx
-    K_scaled[1, 2] *= sy  # cy
-    return K_scaled
+    @staticmethod
+    def scale_intrinsics(
+        K: np.ndarray,
+        src_size: Tuple[int, int],
+        dst_size: Tuple[int, int],
+    ) -> np.ndarray:
+        """Scale camera intrinsics when image size changes."""
+        src_w, src_h = int(src_size[0]), int(src_size[1])
+        dst_w, dst_h = int(dst_size[0]), int(dst_size[1])
+        if src_w <= 0 or src_h <= 0 or dst_w <= 0 or dst_h <= 0:
+            return np.asarray(K, dtype=np.float64).copy()
+        if src_w == dst_w and src_h == dst_h:
+            return np.asarray(K, dtype=np.float64).copy()
 
+        sx = float(dst_w) / float(src_w)
+        sy = float(dst_h) / float(src_h)
 
-def _overlay_rt_on_image_top_left(
-    image: np.ndarray,
-    R: np.ndarray,
-    t: np.ndarray,
-    *,
-    x0: int = 8,
-    y0: int = 20,
-    line_height: int = 18,
-    font_scale: float = 0.45,
-    thickness: int = 1,
-) -> np.ndarray:
-    """
-    Draw 3×3 rotation matrix R and translation vector t at the top-left with
-    cv2.putText (white text, black outline for contrast). Returns a BGR image.
-    """
-    if image.ndim == 2:
-        out = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
-    else:
-        out = image.copy()
-    font = cv2.FONT_HERSHEY_SIMPLEX
-    white = (255, 255, 255)
-    black = (0, 0, 0)
-    y = int(y0)
-    R = np.asarray(R, dtype=np.float64).reshape(3, 3)
-    t = np.asarray(t, dtype=np.float64).reshape(-1)
+        K_scaled = np.asarray(K, dtype=np.float64).copy()
+        K_scaled[0, 0] *= sx
+        K_scaled[1, 1] *= sy
+        K_scaled[0, 2] *= sx
+        K_scaled[1, 2] *= sy
+        return K_scaled
 
-    def _put_line(text: str) -> None:
-        nonlocal y
-        cv2.putText(
-            out, text, (x0, y), font, font_scale, black, thickness + 2, cv2.LINE_AA,
-        )
-        cv2.putText(
-            out, text, (x0, y), font, font_scale, white, thickness, cv2.LINE_AA,
-        )
-        y += line_height
+    @staticmethod
+    def overlay_rt_on_image_top_left(
+        image: np.ndarray,
+        R: np.ndarray,
+        t: np.ndarray,
+        *,
+        x0: int = 8,
+        y0: int = 20,
+        line_height: int = 18,
+        font_scale: float = 1.0,
+        thickness: int = 1,
+    ) -> np.ndarray:
+        """Draw R and t at top-left. Returns a BGR image."""
+        if image.ndim == 2:
+            out = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
+        else:
+            out = image.copy()
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        white = (255, 255, 255)
+        black = (0, 0, 0)
+        y = int(y0)
+        R = np.asarray(R, dtype=np.float64).reshape(3, 3)
+        t = np.asarray(t, dtype=np.float64).reshape(-1)
 
-    _put_line("R:")
-    for i in range(3):
-        row = R[i]
-        _put_line(
-            f"  {row[0]:8.4f} {row[1]:8.4f} {row[2]:8.4f}"
-        )
-    _put_line(
-        f"t: [{t[0]:8.4f}, {t[1]:8.4f}, {t[2]:8.4f}]"
-    )
-    return out
+        def _put_line(text: str) -> None:
+            nonlocal y
+            cv2.putText(
+                out, text, (x0, y), font, font_scale, black, thickness + 2, cv2.LINE_AA,
+            )
+            cv2.putText(
+                out, text, (x0, y), font, font_scale, white, thickness, cv2.LINE_AA,
+            )
+            y += line_height
+
+        _put_line("R:")
+        for i in range(3):
+            row = R[i]
+            _put_line(f"  {row[0]:8.4f} {row[1]:8.4f} {row[2]:8.4f}")
+        _put_line(f"t: [{t[0]:8.4f}, {t[1]:8.4f}, {t[2]:8.4f}]")
+        return out
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Core inference engine (stateful, wraps the ONNX pipeline)
+# Three-stage pipeline components: detector / feature match / pose estimation
+# ─────────────────────────────────────────────────────────────────────────────
+
+class OnePoseDetector:
+    """Stage 1: object detection and crop generation."""
+
+    def __init__(
+        self,
+        superpoint_onnx: str,
+        superglue_onnx: str,
+        sfm_ws_dir: str,
+        bbox3d: np.ndarray,
+        detect_save_dir: str | None = None,
+        seq_dir: str | None = None,
+    ):
+        detection_vis_dir = None
+        if detect_save_dir:
+            detection_vis_dir = str(Path(detect_save_dir) / "detection_vis")
+
+        self._detector = LocalFeatureObjectDetectorOnnx(
+            superpoint_onnx_path=superpoint_onnx,
+            superglue_onnx_path=superglue_onnx,
+            sfm_ws_dir=sfm_ws_dir,
+            output_results=True,
+            detect_save_dir=detection_vis_dir,
+            seq_dir=seq_dir,
+        )
+        self._bbox3d = np.asarray(bbox3d, dtype=np.float64)
+
+    def detect(
+        self,
+        gray_img: np.ndarray,
+        img_path: str,
+        K: np.ndarray,
+        frame_id: int,
+        prev_pose: Optional[np.ndarray],
+        prev_inliers: list,
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        inp = (gray_img[np.newaxis, np.newaxis] / 255.0).astype(np.float32)
+        if frame_id == 0 or len(prev_inliers) < 8 or prev_pose is None:
+            return self._detector.detect(inp, img_path, K)
+        return self._detector.previous_pose_detect(img_path, K, prev_pose, self._bbox3d)
+
+
+class OnePoseFeatureMatcher:
+    """Stage 2: SuperPoint extraction + GAT 2D-3D matching."""
+
+    def __init__(
+        self,
+        superpoint_onnx: str,
+        gatsspg_onnx: str,
+        avg_anno_3d_path: str,
+        clt_anno_3d_path: str,
+        idxs_path: str,
+        num_leaf: int = 8,
+    ):
+        sp_cfg = {
+            'nms_radius': 3,
+            'keypoint_threshold': 0.005,
+            'max_keypoints': 4096,
+            'remove_borders': 4,
+        }
+        self._extractor = SuperPointOnnx(superpoint_onnx, config=sp_cfg)
+        self._matcher_3d = GATsSPGOnnx(gatsspg_onnx)
+        self._num_leaf = num_leaf
+
+        avg_data = np.load(avg_anno_3d_path)
+        clt_data = np.load(clt_anno_3d_path)
+        idxs = np.load(idxs_path)
+
+        self.keypoints3d = clt_data['keypoints3d'].astype(np.float32)
+        num_3d = self.keypoints3d.shape[0]
+        avg_desc3d, _ = _pad_features3d(
+            avg_data['descriptors3d'].astype(np.float32),
+            avg_data['scores3d'].astype(np.float32),
+            num_3d,
+        )
+        clt_desc, _ = _build_features3d_leaves(
+            clt_data['descriptors3d'].astype(np.float32),
+            clt_data['scores3d'].astype(np.float32),
+            idxs,
+            num_3d,
+            self._num_leaf,
+        )
+        self._avg_desc3d_b = avg_desc3d[np.newaxis]
+        self._clt_desc_b = clt_desc[np.newaxis]
+        self._kpts3d_b = self.keypoints3d[np.newaxis]
+
+    @staticmethod
+    def _build_matcher_input(
+        kpts2d: np.ndarray,
+        desc2d: np.ndarray,
+        kpts3d_b: np.ndarray,
+        avg_desc3d_b: np.ndarray,
+        clt_desc_b: np.ndarray,
+    ) -> dict:
+        return {
+            'keypoints2d': kpts2d[np.newaxis].astype(np.float32),
+            'keypoints3d': kpts3d_b,
+            'descriptors2d_query': desc2d[np.newaxis].astype(np.float32),
+            'descriptors3d_db': avg_desc3d_b,
+            'descriptors2d_db': clt_desc_b,
+        }
+
+    def match(self, inp_crop: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+        pred_det = self._extractor(inp_crop)
+        kpts2d = pred_det['keypoints']
+        desc2d = pred_det['descriptors']
+        inp_data = self._build_matcher_input(
+            kpts2d,
+            desc2d,
+            self._kpts3d_b,
+            self._avg_desc3d_b,
+            self._clt_desc_b,
+        )
+        pred, _ = self._matcher_3d(inp_data)
+        matches = pred['matches0'].numpy().flatten().astype(np.int32)
+        valid = matches > -1
+        mkpts2d = kpts2d[valid]
+        mkpts3d = self.keypoints3d[matches[valid]]
+        return mkpts2d, mkpts3d
+
+
+class OnePosePoseEstimator:
+    """Stage 3: PnP pose estimation and pose-related conversions."""
+
+    @staticmethod
+    def estimate(
+        K_crop: np.ndarray,
+        mkpts2d: np.ndarray,
+        mkpts3d: np.ndarray,
+    ) -> Tuple[Optional[np.ndarray], Optional[np.ndarray], list]:
+        return ransac_PnP(K_crop, mkpts2d, mkpts3d, scale=1000)
+
+    @staticmethod
+    def rotation_to_quaternion(R_mat: np.ndarray) -> list[float]:
+        rvec, _ = cv2.Rodrigues(R_mat)
+        rvec = rvec.flatten()
+        theta = np.linalg.norm(rvec)
+        if theta < 1e-6:
+            return [0.0, 0.0, 0.0, 1.0]
+        axis = rvec / theta
+        half_theta = theta / 2.0
+        sin_half = float(np.sin(half_theta))
+        return [
+            float(axis[0]) * sin_half,
+            float(axis[1]) * sin_half,
+            float(axis[2]) * sin_half,
+            float(np.cos(half_theta)),
+        ]
+
+    @staticmethod
+    def rpy_from_rotmat_zyx(R: np.ndarray) -> tuple[float, float, float]:
+        sy = float(np.sqrt(R[0, 0] * R[0, 0] + R[1, 0] * R[1, 0]))
+        singular = sy < 1e-6
+        if not singular:
+            roll = float(np.arctan2(R[2, 1], R[2, 2]))
+            pitch = float(np.arctan2(-R[2, 0], sy))
+            yaw = float(np.arctan2(R[1, 0], R[0, 0]))
+        else:
+            roll = float(np.arctan2(-R[1, 2], R[1, 1]))
+            pitch = float(np.arctan2(-R[2, 0], sy))
+            yaw = 0.0
+        return roll, pitch, yaw
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Core inference engine (stateful, wraps the staged pipeline)
 # ─────────────────────────────────────────────────────────────────────────────
 
 class OnePoseEngine:
@@ -275,52 +419,24 @@ class OnePoseEngine:
         max_num_kp3d: int = 2500,
         detect_save_dir: str | None = None,
     ):
-        # ── feature extractor ────────────────────────────────────────────────
-        sp_cfg = {
-            'nms_radius':         3,
-            'keypoint_threshold': 0.005,
-            'max_keypoints':      4096,
-            'remove_borders':     4,
-        }
-        self.extractor  = SuperPointOnnx(superpoint_onnx, config=sp_cfg)
-        self.matcher_3d = GATsSPGOnnx(gatsspg_onnx)
-        self.num_leaf   = num_leaf
-
-        # ── object detector ───────────────────────────────────────────────────
-        self.detector = LocalFeatureObjectDetectorOnnx(
-            superpoint_onnx_path=superpoint_onnx,
-            superglue_onnx_path=superglue_onnx,
+        bbox3d = np.loadtxt(box3d_path)
+        self.detector_stage = OnePoseDetector(
+            superpoint_onnx=superpoint_onnx,
+            superglue_onnx=superglue_onnx,
             sfm_ws_dir=sfm_ws_dir,
-            output_results=True,
-            detect_save_dir= str(detect_save_dir + "/detection_vis"),
+            bbox3d=bbox3d,
+            detect_save_dir=detect_save_dir,
             seq_dir=seq_dir,
         )
-
-        # ── 3-D annotations ───────────────────────────────────────────────────
-        avg_data = np.load(avg_anno_3d_path)
-        clt_data = np.load(clt_anno_3d_path)
-        idxs     = np.load(idxs_path)
-
-        self.keypoints3d = clt_data['keypoints3d'].astype(np.float32)  # [M, 3]
-        num_3d = self.keypoints3d.shape[0]
-
-        avg_desc3d, _ = _pad_features3d(
-            avg_data['descriptors3d'].astype(np.float32),
-            avg_data['scores3d'].astype(np.float32),
-            num_3d,
+        self.feature_match_stage = OnePoseFeatureMatcher(
+            superpoint_onnx=superpoint_onnx,
+            gatsspg_onnx=gatsspg_onnx,
+            avg_anno_3d_path=avg_anno_3d_path,
+            clt_anno_3d_path=clt_anno_3d_path,
+            idxs_path=idxs_path,
+            num_leaf=num_leaf,
         )
-        clt_desc, _ = _build_features3d_leaves(
-            clt_data['descriptors3d'].astype(np.float32),
-            clt_data['scores3d'].astype(np.float32),
-            idxs, num_3d, self.num_leaf,
-        )
-
-        self.avg_desc3d_b = avg_desc3d[np.newaxis]          # [1, 256, M]
-        self.clt_desc_b   = clt_desc[np.newaxis]            # [1, 256, M*L]
-        self.kpts3d_b     = self.keypoints3d[np.newaxis]    # [1, M, 3]
-
-        # ── 3-D bounding box ─────────────────────────────────────────────────
-        self.bbox3d = np.loadtxt(box3d_path)
+        self.pose_estimation_stage = OnePosePoseEstimator()
 
         # ── state ─────────────────────────────────────────────────────────────
         self._prev_pose    = None
@@ -356,40 +472,17 @@ class OnePoseEngine:
         frame_id   : current frame counter
         """
         frame_id = self._frame_id
-        inp = (gray_img[np.newaxis, np.newaxis] / 255.0).astype(np.float32)
-
-        # ── 1. Object detection ───────────────────────────────────────────────
-        if frame_id == 0 or len(self._prev_inliers) < 8:
-            bbox, inp_crop, K_crop = self.detector.detect(inp, img_path, K)
-        else:
-            bbox, inp_crop, K_crop = self.detector.previous_pose_detect(
-                img_path, K, self._prev_pose, self.bbox3d
-            )
-
-        # ── 2. Keypoint extraction ────────────────────────────────────────────
-        pred_det = self.extractor(inp_crop)
-        kpts2d   = pred_det['keypoints']    # [N, 2]
-        desc2d   = pred_det['descriptors']  # [256, N]
-
-        # ── 3. 2D-3D matching ─────────────────────────────────────────────────
-        inp_data = {
-            'keypoints2d':         kpts2d[np.newaxis].astype(np.float32),
-            'keypoints3d':         self.kpts3d_b,
-            'descriptors2d_query': desc2d[np.newaxis].astype(np.float32),
-            'descriptors3d_db':    self.avg_desc3d_b,
-            'descriptors2d_db':    self.clt_desc_b,
-        }
-        pred, _ = self.matcher_3d(inp_data)
-
-        matches  = pred['matches0'].numpy().flatten().astype(np.int32)
-        mscores  = pred['matching_scores0'].numpy().flatten()
-        valid    = matches > -1
-        mkpts2d  = kpts2d[valid]
-        mkpts3d  = self.keypoints3d[matches[valid]]
-
-        # ── 4. PnP pose estimation ────────────────────────────────────────────
-        pose_3x4, pose_4x4, inliers = ransac_PnP(
-            K_crop, mkpts2d, mkpts3d, scale=1000
+        _, inp_crop, K_crop = self.detector_stage.detect(
+            gray_img=gray_img,
+            img_path=img_path,
+            K=K,
+            frame_id=frame_id,
+            prev_pose=self._prev_pose,
+            prev_inliers=self._prev_inliers,
+        )
+        mkpts2d, mkpts3d = self.feature_match_stage.match(inp_crop)
+        pose_3x4, pose_4x4, inliers = self.pose_estimation_stage.estimate(
+            K_crop, mkpts2d, mkpts3d
         )
 
         # ── update state ──────────────────────────────────────────────────────
@@ -641,11 +734,15 @@ class PoseEstimationNode(Node):
         src_h, src_w = gray.shape[:2]
         K_for_frame = np.asarray(self._K, dtype=np.float64).copy()
         if self._K_ref_size is not None:
-            K_for_frame = _scale_intrinsics(K_for_frame, self._K_ref_size, (src_w, src_h))
+            K_for_frame = NodeImageUtils.scale_intrinsics(
+                K_for_frame, self._K_ref_size, (src_w, src_h)
+            )
 
         if self._target_size is not None and (src_w, src_h) != self._target_size:
             gray = cv2.resize(gray, self._target_size, interpolation=cv2.INTER_LINEAR)
-            K_for_frame = _scale_intrinsics(K_for_frame, (src_w, src_h), self._target_size)
+            K_for_frame = NodeImageUtils.scale_intrinsics(
+                K_for_frame, (src_w, src_h), self._target_size
+            )
 
         self._run_inference_and_publish(
             gray_img=gray,
@@ -727,7 +824,7 @@ class PoseEstimationNode(Node):
             return
 
         try:
-            gray = _ros_image_to_gray(msg)
+            gray = NodeImageUtils.ros_image_to_gray(msg)
         except Exception as e:
             self.get_logger().error(f"Image conversion failed: {e}")
             return
@@ -735,13 +832,17 @@ class PoseEstimationNode(Node):
         src_h, src_w = gray.shape[:2]
         K_for_frame = np.asarray(K, dtype=np.float64).copy()
         if K_ref_size is not None:
-            K_for_frame = _scale_intrinsics(K_for_frame, K_ref_size, (src_w, src_h))
+            K_for_frame = NodeImageUtils.scale_intrinsics(
+                K_for_frame, K_ref_size, (src_w, src_h)
+            )
 
         if self._target_size is not None and (src_w, src_h) != self._target_size:
             gray = cv2.resize(gray, self._target_size, interpolation=cv2.INTER_LINEAR)
-            K_for_frame = _scale_intrinsics(K_for_frame, (src_w, src_h), self._target_size)
+            K_for_frame = NodeImageUtils.scale_intrinsics(
+                K_for_frame, (src_w, src_h), self._target_size
+            )
 
-        img_path = _save_tmp_image(gray)
+        img_path = NodeImageUtils.save_tmp_image(gray)
 
         self._run_inference_and_publish(
             gray_img=gray,
@@ -804,23 +905,7 @@ class PoseEstimationNode(Node):
             R_mat = pose_3x4[:, :3]   # [3, 3]
             t = pose_3x4[:, 3]        # [3]
             t_vec = t.flatten().tolist()
-
-            # Convert rotation matrix to quaternion using cv2.Rodrigues
-            rvec, _ = cv2.Rodrigues(R_mat)
-            rvec = rvec.flatten()
-            theta = np.linalg.norm(rvec)
-            if theta < 1e-6:
-                q = [0.0, 0.0, 0.0, 1.0]
-            else:
-                axis = rvec / theta
-                half_theta = theta / 2.0
-                sin_half = float(np.sin(half_theta))
-                q = [
-                    float(axis[0]) * sin_half, # x
-                    float(axis[1]) * sin_half, # y
-                    float(axis[2]) * sin_half, # z
-                    float(np.cos(half_theta))  # w
-                ]
+            q = OnePosePoseEstimator.rotation_to_quaternion(R_mat)
 
             msg.pose.position.x = float(t_vec[0])
             msg.pose.position.y = float(t_vec[1])
@@ -884,27 +969,15 @@ class PoseEstimationNode(Node):
                     pose_homo=pose_4x4.astype(np.float64),
                     draw_axes=True,
                 )
-                vis_img = _overlay_rt_on_image_top_left(vis_img, R_mat, np.asarray(t_vec))
+                vis_img = NodeImageUtils.overlay_rt_on_image_top_left(
+                    vis_img, R_mat, np.asarray(t_vec)
+                )
                 cv2.imwrite(save_path, vis_img)
             except Exception as e:
                 self.get_logger().warn(f"save_vis failed: {e}")
 
         # ── log ───────────────────────────────────────────────────────────────
         status = "OK" if success else "FAILED"
-
-        def _rpy_from_rotmat_zyx(R: np.ndarray) -> tuple[float, float, float]:
-            """Return roll/pitch/yaw (rad) from rotation matrix using ZYX convention."""
-            sy = float(np.sqrt(R[0, 0] * R[0, 0] + R[1, 0] * R[1, 0]))
-            singular = sy < 1e-6
-            if not singular:
-                roll = float(np.arctan2(R[2, 1], R[2, 2]))
-                pitch = float(np.arctan2(-R[2, 0], sy))
-                yaw = float(np.arctan2(R[1, 0], R[0, 0]))
-            else:
-                roll = float(np.arctan2(-R[1, 2], R[1, 1]))
-                pitch = float(np.arctan2(-R[2, 0], sy))
-                yaw = 0.0
-            return roll, pitch, yaw
 
         if success:
             # Camera optical frame (OpenCV): x-right, y-down, z-forward
@@ -920,8 +993,8 @@ class PoseEstimationNode(Node):
             R_ee_obj = R_ee_cam @ R_mat
             t_ee_obj = R_ee_cam @ t_cam_obj
 
-            roll_cam, pitch_cam, yaw_cam = _rpy_from_rotmat_zyx(R_mat)
-            roll_ee, pitch_ee, yaw_ee = _rpy_from_rotmat_zyx(R_ee_obj)
+            roll_cam, pitch_cam, yaw_cam = OnePosePoseEstimator.rpy_from_rotmat_zyx(R_mat)
+            roll_ee, pitch_ee, yaw_ee = OnePosePoseEstimator.rpy_from_rotmat_zyx(R_ee_obj)
 
             r_mat_log = (
                 f"R_cam_obj=[[{R_mat[0,0]:.4f}, {R_mat[0,1]:.4f}, {R_mat[0,2]:.4f}], "
