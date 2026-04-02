@@ -3,7 +3,7 @@ import scipy.spatial.distance as distance
 try:
     from src.utils import path_utils
 except ImportError:
-    from utils import path_utils
+    from src.utils import path_utils
 
 
 def get_pairswise_distances(pose_files):

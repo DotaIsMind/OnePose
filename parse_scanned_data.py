@@ -18,7 +18,7 @@ if not hasattr(np, 'maximum_sctype'):
     np.maximum_sctype = lambda t: np.float64
 
 from transforms3d import affines, quaternions
-from utils import data_utils
+from src.utils import data_utils
 
 def get_arkit_default_path(data_dir):
     video_file = osp.join(data_dir, 'Frames.m4v')

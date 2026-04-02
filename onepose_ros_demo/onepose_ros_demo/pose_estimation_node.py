@@ -896,7 +896,7 @@ class PoseEstimationNode(Node):
             pose_3x4 is not None
             and pose_4x4 is not None
             and inliers is not None
-            # and len(inliers) > 0
+            and len(inliers) > 0
         )
         num_inliers = int(len(inliers)) if inliers is not None else -1
 

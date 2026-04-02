@@ -5,7 +5,7 @@ from pytorch_lightning.loggers import LightningLoggerBase
 import hydra
 from omegaconf import DictConfig
 from typing import List
-from utils import template_utils as utils
+from src.utils import template_utils as utils
 
 import warnings
 warnings.filterwarnings('ignore')

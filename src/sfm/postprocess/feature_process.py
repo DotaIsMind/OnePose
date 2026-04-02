@@ -10,8 +10,8 @@ try:
     from src.utils.colmap import read_write_model
     from src.utils import path_utils
 except ImportError:
-    from utils.colmap import read_write_model
-    from utils import path_utils
+    from src.utils.colmap import read_write_model
+    from src.utils import path_utils
 
 
 def get_default_path(cfg, outputs_dir):

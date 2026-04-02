@@ -57,11 +57,11 @@ def run_pytorch_inference(max_frames: int | None = None) -> Tuple[dict, dict]:
     """Run the original PyTorch pipeline and return (pred_poses, timing)."""
     import torch
     from torch.utils.data import DataLoader
-    from utils.data_utils import get_K, pad_features3d_random, build_features3d_leaves
-    from utils.path_utils import get_3d_box_path
-    from utils.eval_utils import ransac_PnP
-    from utils.vis_utils import save_demo_image, make_video
-    from utils.model_io import load_network
+    from src.utils.data_utils import get_K, pad_features3d_random, build_features3d_leaves
+    from src.utils.path_utils import get_3d_box_path
+    from src.utils.eval_utils import ransac_PnP
+    from src.utils.vis_utils import save_demo_image, make_video
+    from src.utils.model_io import load_network
     from src.models.GATsSPG_lightning_model import LitModelGATsSPG
     from src.models.extractors.SuperPoint.superpoint import SuperPoint
     from src.models.matchers.SuperGlue.superglue import SuperGlue
@@ -85,7 +85,9 @@ def run_pytorch_inference(max_frames: int | None = None) -> Tuple[dict, dict]:
     matcher_2d.eval()
     load_network(matcher_2d, SG_PTH, force=True)
 
-    lit = LitModelGATsSPG.load_from_checkpoint(GAT_CKPT, map_location='cpu')
+    lit = LitModelGATsSPG.load_from_checkpoint(
+        GAT_CKPT, map_location="cpu", weights_only=False
+    )
     lit.eval()
     matcher_3d = lit.matcher
 

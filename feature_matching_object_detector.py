@@ -8,8 +8,8 @@ import os.path as osp
 
 from loguru import logger
 from torch.utils.data import DataLoader
-from utils import data_utils
-from utils.model_io import load_network
+from src.utils import data_utils
+from src.utils.model_io import load_network
 from src.local_feature_2D_detector import LocalFeatureObjectDetector
 
 from pytorch_lightning import seed_everything

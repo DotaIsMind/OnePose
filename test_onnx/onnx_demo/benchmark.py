@@ -147,31 +147,11 @@ def run_pytorch_inference(max_frames: int | None = None) -> Tuple[dict, dict]:
     matcher_2d.eval()
     load_network(matcher_2d, SG_PTH, force=True)
 
-    # PyTorch 2.6+ defaults torch.load(..., weights_only=True), which may fail for
-    # older Lightning checkpoints that contain OmegaConf objects.
-    try:
-        from omegaconf.listconfig import ListConfig
-        from torch.serialization import add_safe_globals
-
-        add_safe_globals([ListConfig])
-    except Exception:
-        # Keep compatibility when OmegaConf/serialization APIs change.
-        pass
-
-    try:
-        lit = LitModelGATsSPG.load_from_checkpoint(GAT_CKPT, map_location='cpu')
-    except Exception as e:
-        if "Weights only load failed" not in str(e):
-            raise
-        print(
-            "[warn] Lightning checkpoint 受 PyTorch weights_only 限制，"
-            "将回退为 weights_only=False（仅适用于受信任权重）。"
-        )
-        lit = LitModelGATsSPG.load_from_checkpoint(
-            GAT_CKPT,
-            map_location='cpu',
-            weights_only=False,
-        )
+    # PyTorch 2.6+ defaults torch.load(weights_only=True); Lightning .ckpt 含
+    # OmegaConf 等需 weights_only=False（仅用于受信任权重）。
+    lit = LitModelGATsSPG.load_from_checkpoint(
+        GAT_CKPT, map_location="cpu", weights_only=False
+    )
     lit.eval()
     matcher_3d = lit.matcher
 

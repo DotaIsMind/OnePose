@@ -247,7 +247,7 @@ def export_superpoint(model_path: str, output_path: str):
     print(f"\n[1/3] Exporting SuperPoint  ->  {output_path}")
     from src.models.extractors.SuperPoint.superpoint import SuperPoint
     from src.sfm.extract_features import confs
-    from utils.model_io import load_network
+    from src.utils.model_io import load_network
 
     conf = confs['superpoint']['conf']
     sp = SuperPoint(conf)
@@ -284,7 +284,7 @@ def export_superglue(model_path: str, output_path: str):
     print(f"\n[2/3] Exporting SuperGlue   ->  {output_path}")
     from src.models.matchers.SuperGlue.superglue import SuperGlue
     from src.sfm.match_features import confs
-    from utils.model_io import load_network
+    from src.utils.model_io import load_network
 
     conf = confs['superglue']['conf']
     sg = SuperGlue(conf)
@@ -335,7 +335,9 @@ def export_gatsspg(model_path: str, output_path: str):
     print(f"\n[3/3] Exporting GATsSPG     ->  {output_path}")
     from src.models.GATsSPG_lightning_model import LitModelGATsSPG
 
-    lit = LitModelGATsSPG.load_from_checkpoint(model_path, map_location='cpu')
+    lit = LitModelGATsSPG.load_from_checkpoint(
+        model_path, map_location="cpu", weights_only=False
+    )
     lit.eval()
 
     wrapper = GATsSPGOnnxWrapper(lit.matcher)

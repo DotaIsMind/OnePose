@@ -32,7 +32,7 @@ def spp(img_lists, feature_out, cfg):
     try:
         from src.utils.model_io import load_network
     except ImportError:
-        from utils.model_io import load_network
+        from src.utils.model_io import load_network
     from src.models.extractors.SuperPoint.superpoint import SuperPoint as spp_det
     from src.datasets.normalized_dataset import NormalizedDataset
     

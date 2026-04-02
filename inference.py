@@ -8,7 +8,7 @@ import numpy as np
 from PIL import Image
 from loguru import logger
 from torch.utils.data import DataLoader
-from utils import data_utils, path_utils, eval_utils, vis_utils
+from src.utils import data_utils, path_utils, eval_utils, vis_utils
 
 from pytorch_lightning import seed_everything
 seed_everything(12345)
@@ -52,7 +52,11 @@ def load_model(cfg):
         """ Load onepose model """
         from src.models.GATsSPG_lightning_model import LitModelGATsSPG
 
-        trained_model = LitModelGATsSPG.load_from_checkpoint(checkpoint_path=model_path)
+        trained_model = LitModelGATsSPG.load_from_checkpoint(
+            checkpoint_path=model_path,
+            map_location="cpu",
+            weights_only=False,
+        )
         trained_model.cuda()
         trained_model.eval()
         trained_model.freeze()
@@ -63,7 +67,7 @@ def load_model(cfg):
         """ Load extractor model(SuperPoint) """
         from src.models.extractors.SuperPoint.superpoint import SuperPoint
         from src.sfm.extract_features import confs
-        from utils.model_io import load_network
+        from src.utils.model_io import load_network
 
         extractor_model = SuperPoint(confs[cfg.network.detection]['conf'])
         extractor_model.cuda()

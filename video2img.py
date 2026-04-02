@@ -1,7 +1,7 @@
 import os.path as osp
 from argparse import ArgumentParser
 from pathlib import Path
-from utils.data_utils import video2img
+from src.utils.data_utils import video2img
 
 
 def main():

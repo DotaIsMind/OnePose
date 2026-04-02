@@ -29,8 +29,8 @@ def spg(cfg, feature_path, covis_pairs, matches_out, vis_match=False):
         from src.utils.model_io import load_network
         from src.utils.vis_utils import vis_match_pairs
     except ImportError:
-        from utils.model_io import load_network
-        from utils.vis_utils import vis_match_pairs
+        from src.utils.model_io import load_network
+        from src.utils.vis_utils import vis_match_pairs
     
     assert osp.exists(feature_path), feature_path
     feature_file = h5py.File(feature_path, 'r')

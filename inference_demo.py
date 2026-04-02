@@ -9,8 +9,8 @@ import numpy as np
 
 from loguru import logger
 from torch.utils.data import DataLoader
-from utils import data_utils, path_utils, eval_utils, vis_utils
-from utils.model_io import load_network
+from src.utils import data_utils, path_utils, eval_utils, vis_utils
+from src.utils.model_io import load_network
 from src.local_feature_2D_detector import LocalFeatureObjectDetector
 
 
@@ -78,7 +78,11 @@ def load_model(cfg):
         """Load onepose model"""
         from src.models.GATsSPG_lightning_model import LitModelGATsSPG
 
-        trained_model = LitModelGATsSPG.load_from_checkpoint(checkpoint_path=model_path)
+        trained_model = LitModelGATsSPG.load_from_checkpoint(
+            checkpoint_path=model_path,
+            map_location="cpu",
+            weights_only=False,
+        )
         trained_model.cuda()
         trained_model.eval()
 
