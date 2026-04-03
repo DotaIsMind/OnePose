@@ -12,6 +12,7 @@ Run (from anywhere):
 from __future__ import annotations
 
 import glob
+import logging
 import os
 import os.path as osp
 import sys
@@ -653,13 +654,48 @@ class OnnxOnePosePipeline:
         kpts3d_b = keypoints3d[np.newaxis]
 
         pred_poses: Dict[int, Tuple] = {}
-        timing: Dict[str, List[float]] = {"detect": [], "extract": [], "match3d": [], "pnp": []}
+        timing: Dict[str, List[float]] = {
+            "detect_pre": [],
+            "detect_onnx": [],
+            "detect_post": [],
+            "detect_total": [],
+            "extract": [],
+            "match_pre": [],
+            "match_onnx": [],
+            "match_post": [],
+            "match_total": [],
+            "pose_pre": [],
+            "pose_onnx": [],
+            "pose_post": [],
+            "pose_total": [],
+            "inference_onnx_total": [],
+        }
+
+        log_path = osp.join(seq_dir, "inference_core.log")
+        logger = logging.getLogger(f"inference_core_{id(self)}")
+        logger.setLevel(logging.INFO)
+        logger.propagate = False
+        logger.handlers.clear()
+        fh = logging.FileHandler(log_path, mode="w")
+        fh.setFormatter(logging.Formatter("%(message)s"))
+        logger.addHandler(fh)
+        logger.info("# per-frame timing in milliseconds")
+        logger.info(
+            "# frame_xxxx: detect_pre(CPU)=x ms, detect_onnx(ONNX)=x ms, "
+            "detect_post(CPU)=x ms, detect_total=x ms, extract(ONNX)=x ms, "
+            "match_pre(CPU)=x ms, match_onnx(ONNX)=x ms, match_post(CPU)=x ms, "
+            "match_total=x ms, pose_pre(CPU)=x ms, pose_onnx(ONNX)=x ms, "
+            "pose_post(CPU)=x ms, pose_total=x ms, "
+            "inference_onnx_total=x ms, pipeline_total=x ms"
+        )
 
         for frame_id, img_path in enumerate(tqdm(img_lists, desc="ONNX inference")):
             t0 = time.perf_counter()
             img_gray = cv2.imread(img_path, cv2.IMREAD_GRAYSCALE)
             inp = (img_gray[np.newaxis, np.newaxis] / 255.0).astype(np.float32)
+            detect_pre_s = time.perf_counter() - t0
 
+            t_detect_onnx = time.perf_counter()
             if frame_id == 0:
                 bbox, inp_crop, K_crop = detector.detect(inp, img_path, K)
             else:
@@ -670,7 +706,16 @@ class OnnxOnePosePipeline:
                     bbox, inp_crop, K_crop = detector.previous_pose_detect(
                         img_path, K, prev_pose, bbox3d
                     )
-            timing["detect"].append(time.perf_counter() - t0)
+            detect_onnx_s = time.perf_counter() - t_detect_onnx
+            t_detect_post = time.perf_counter()
+            bbox = np.asarray(bbox, dtype=np.int32)
+            detect_post_s = time.perf_counter() - t_detect_post
+            detect_total_s = detect_pre_s + detect_onnx_s + detect_post_s
+
+            timing["detect_pre"].append(detect_pre_s)
+            timing["detect_onnx"].append(detect_onnx_s)
+            timing["detect_post"].append(detect_post_s)
+            timing["detect_total"].append(detect_total_s)
 
             t1 = time.perf_counter()
             pred_det = self.extractor(inp_crop)
@@ -687,19 +732,77 @@ class OnnxOnePosePipeline:
                 "descriptors3d_db": avg_desc3d_b,
                 "descriptors2d_db": clt_desc_b,
             }
-            pred, _ = self.matcher_3d(inp_data)
-            timing["match3d"].append(time.perf_counter() - t2)
+            match_pre_s = time.perf_counter() - t2
 
+            t_match_onnx = time.perf_counter()
+            pred, _ = self.matcher_3d(inp_data)
+            match_onnx_s = time.perf_counter() - t_match_onnx
+
+            t_match_post = time.perf_counter()
             matches = pred["matches0"].numpy().flatten().astype(np.int32)
             mscores = pred["matching_scores0"].numpy().flatten()
             valid = matches > -1
             mkpts2d = kpts2d[valid]
             mkpts3d = keypoints3d[matches[valid]]
             mconf = mscores[valid]
+            match_post_s = time.perf_counter() - t_match_post
+            match_total_s = match_pre_s + match_onnx_s + match_post_s
+
+            timing["match_pre"].append(match_pre_s)
+            timing["match_onnx"].append(match_onnx_s)
+            timing["match_post"].append(match_post_s)
+            timing["match_total"].append(match_total_s)
 
             t3 = time.perf_counter()
-            pose_pred, pose_pred_homo, inliers = ransac_PnP(K_crop, mkpts2d, mkpts3d, scale=1000)
-            timing["pnp"].append(time.perf_counter() - t3)
+            K_crop_pnp = np.ascontiguousarray(K_crop, dtype=np.float32)
+            mkpts2d_pnp = np.ascontiguousarray(mkpts2d, dtype=np.float32)
+            mkpts3d_pnp = np.ascontiguousarray(mkpts3d, dtype=np.float32)
+            pose_pre_s = time.perf_counter() - t3
+
+            pose_onnx_s = 0.0
+
+            t_pose_post = time.perf_counter()
+            pose_pred, pose_pred_homo, inliers = ransac_PnP(
+                K_crop_pnp, mkpts2d_pnp, mkpts3d_pnp, scale=1000
+            )
+            pose_post_s = time.perf_counter() - t_pose_post
+            pose_total_s = pose_pre_s + pose_onnx_s + pose_post_s
+
+            timing["pose_pre"].append(pose_pre_s)
+            timing["pose_onnx"].append(pose_onnx_s)
+            timing["pose_post"].append(pose_post_s)
+            timing["pose_total"].append(pose_total_s)
+            inference_onnx_total_s = detect_onnx_s + timing["extract"][-1] + match_onnx_s + pose_onnx_s
+            pipeline_total_s = detect_total_s + timing["extract"][-1] + match_total_s + pose_total_s
+            timing["inference_onnx_total"].append(inference_onnx_total_s)
+
+            logger.info(
+                "frame_%04d: "
+                "detect_pre(CPU)=%.2f ms, detect_onnx(ONNX)=%.2f ms, "
+                "detect_post(CPU)=%.2f ms, detect_total=%.2f ms, "
+                "extract(ONNX)=%.2f ms, "
+                "match_pre(CPU)=%.2f ms, match_onnx(ONNX)=%.2f ms, "
+                "match_post(CPU)=%.2f ms, match_total=%.2f ms, "
+                "pose_pre(CPU)=%.2f ms, pose_onnx(ONNX)=%.2f ms, "
+                "pose_post(CPU)=%.2f ms, pose_total=%.2f ms, "
+                "inference_onnx_total=%.2f ms, pipeline_total=%.2f ms",
+                frame_id,
+                detect_pre_s * 1000.0,
+                detect_onnx_s * 1000.0,
+                detect_post_s * 1000.0,
+                detect_total_s * 1000.0,
+                timing["extract"][-1] * 1000.0,
+                match_pre_s * 1000.0,
+                match_onnx_s * 1000.0,
+                match_post_s * 1000.0,
+                match_total_s * 1000.0,
+                pose_pre_s * 1000.0,
+                pose_onnx_s * 1000.0,
+                pose_post_s * 1000.0,
+                pose_total_s * 1000.0,
+                inference_onnx_total_s * 1000.0,
+                pipeline_total_s * 1000.0,
+            )
 
             pred_poses[frame_id] = (pose_pred, inliers)
 
@@ -717,8 +820,44 @@ class OnnxOnePosePipeline:
         make_video(paths["vis_box_dir"], paths["demo_video_path"])
         print(f"\n[ONNX] Demo video saved to: {paths['demo_video_path']}")
 
+        timing_label = {
+            "detect_pre": "detect_pre(CPU)",
+            "detect_onnx": "detect_onnx(ONNX)",
+            "detect_post": "detect_post(CPU)",
+            "detect_total": "detect_total",
+            "extract": "extract(ONNX)",
+            "match_pre": "match_pre(CPU)",
+            "match_onnx": "match_onnx(ONNX)",
+            "match_post": "match_post(CPU)",
+            "match_total": "match_total",
+            "pose_pre": "pose_pre(CPU)",
+            "pose_onnx": "pose_onnx(ONNX)",
+            "pose_post": "pose_post(CPU)",
+            "pose_total": "pose_total",
+            "inference_onnx_total": "inference_onnx_total",
+        }
+
+        logger.info("# average timing in milliseconds")
         for k, v in timing.items():
-            print(f"  avg {k:10s}: {np.mean(v)*1000:.1f} ms/frame")
+            avg_ms = np.mean(v) * 1000.0
+            min_ms = np.min(v) * 1000.0
+            max_ms = np.max(v) * 1000.0
+            label = timing_label.get(k, k)
+            print(
+                f"  {label:20s}: avg={avg_ms:.1f} ms/frame, "
+                f"min={min_ms:.1f}, max={max_ms:.1f}"
+            )
+            logger.info(
+                "%-20s: avg=%.2f ms/frame, min=%.2f, max=%.2f",
+                label,
+                avg_ms,
+                min_ms,
+                max_ms,
+            )
+        logger.info("log_path=%s", log_path)
+        print(f"[ONNX] Core timing log saved to: {log_path}")
+        fh.close()
+        logger.removeHandler(fh)
 
         return pred_poses, timing
 
@@ -745,12 +884,12 @@ def main():
 
     _ensure_import_path()
 
-    _demo_root = Path("/home/data/qrb_ros_simulation_ws/OnePose-main/data/demo/test_coffee")
+    _demo_root = Path("/home/ubuntu/tengf/vision-grab/OnePose/data/demo/test_coffee")
     data_root = str(_demo_root)
     seq_dir = str(_demo_root / "test_coffee-test")
     sfm_model_dir = str(_demo_root / "sfm_model")
 
-    onnx_dir = Path(__file__).resolve().parent / "models"
+    onnx_dir = Path(__file__).resolve().parent / "models/onnx"
     sp = str(onnx_dir / "superpoint.onnx")
     sg = str(onnx_dir / "superglue.onnx")
     gat = str(onnx_dir / "gatsspg.onnx")
