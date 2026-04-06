@@ -5,6 +5,7 @@ from tqdm import tqdm
 import os
 import os.path as osp
 import numpy as np
+import time
 # import natsort
 
 from loguru import logger
@@ -202,17 +203,24 @@ def inference_core(cfg, data_root, seq_dir, sfm_model_dir):
             # Detect object:
             if id == 0:
                 # Detect object by 2D local feature matching for the first frame:
+                detection_time = time.perf_counter()
                 bbox, inp_crop, K_crop = local_feature_obj_detector.detect(inp, img_path, K)
+                detection_time = (time.perf_counter() - detection_time) * 1000.0
+                print(f" ==== id 0 Detection time: {detection_time:.2f}ms ====")
             else:
                 # Use 3D bbox and previous frame's pose to yield current frame 2D bbox:
                 previous_frame_pose, inliers = pred_poses[id - 1]
 
                 if len(inliers) < 8:
                     # Consider previous pose estimation failed, reuse local feature object detector:
+                    detection_time = time.perf_counter()
                     bbox, inp_crop, K_crop = local_feature_obj_detector.detect(
                         inp, img_path, K
                     )
+                    detection_time = (time.perf_counter() - detection_time) * 1000.0
+                    print(f" ==== < 8 Detection time: {detection_time:.2f}ms ====")
                 else:
+                    detection_time = time.perf_counter()                   
                     (
                         bbox,
                         inp_crop,
@@ -220,6 +228,8 @@ def inference_core(cfg, data_root, seq_dir, sfm_model_dir):
                     ) = local_feature_obj_detector.previous_pose_detect(
                         img_path, K, previous_frame_pose, bbox3d
                     )
+                    detection_time = (time.perf_counter() - detection_time) * 1000.0
+                    print(f" ==== continue Detection time: {detection_time:.2f}ms ====")
 
             # Detect query image(cropped) keypoints and extract descriptors:
             pred_detection = extractor_model(inp_crop)

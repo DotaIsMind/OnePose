@@ -266,8 +266,12 @@ class OnePoseDetector:
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         inp = (gray_img[np.newaxis, np.newaxis] / 255.0).astype(np.float32)
         if frame_id == 0 or len(prev_inliers) < 8 or prev_pose is None:
+            print("==== detect by matching ====")
             return self._detector.detect(inp, img_path, K)
+        print("==== detect by previous pose ====")
         return self._detector.previous_pose_detect(img_path, K, prev_pose, self._bbox3d)
+        # print("==== detect by matching ====")
+        # return self._detector.detect(inp, img_path, K)
 
 
 class OnePoseFeatureMatcher:
@@ -472,6 +476,7 @@ class OnePoseEngine:
         frame_id   : current frame counter
         """
         frame_id = self._frame_id
+        detection_time = time.perf_counter()
         _, inp_crop, K_crop = self.detector_stage.detect(
             gray_img=gray_img,
             img_path=img_path,
@@ -480,10 +485,17 @@ class OnePoseEngine:
             prev_pose=self._prev_pose,
             prev_inliers=self._prev_inliers,
         )
+        detection_time = (time.perf_counter() - detection_time) * 1000.0
+        feature_match_time = time.perf_counter()
         mkpts2d, mkpts3d = self.feature_match_stage.match(inp_crop)
+        feature_match_time = (time.perf_counter() - feature_match_time) * 1000.0
+        pose_estimation_time = time.perf_counter()
         pose_3x4, pose_4x4, inliers = self.pose_estimation_stage.estimate(
             K_crop, mkpts2d, mkpts3d
         )
+        pose_estimation_time = (time.perf_counter() - pose_estimation_time) * 1000.0
+        total_time = detection_time + feature_match_time + pose_estimation_time
+        print(f"Detection time: {detection_time:.2f}ms, Feature match time: {feature_match_time:.2f}ms, Pose estimation time: {pose_estimation_time:.2f}ms, Total time: {total_time:.2f}ms")   
 
         # ── update state ──────────────────────────────────────────────────────
         self._prev_pose    = pose_3x4
